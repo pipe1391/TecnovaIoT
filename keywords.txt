@@ -1,0 +1,21 @@
+#######################################
+# Syntax Coloring Map For TecnovaIoT
+#######################################
+
+#######################################
+# Datatypes (KEYWORD1)
+#######################################
+
+TecnovaIoT	KEYWORD1
+TecnovaCommandCallback	KEYWORD1
+
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+
+begin	KEYWORD2
+loop	KEYWORD2
+onCommand	KEYWORD2
+setValue	KEYWORD2
+isConnected	KEYWORD2
+printStats	KEYWORD2

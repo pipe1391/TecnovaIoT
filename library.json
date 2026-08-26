@@ -1,0 +1,32 @@
+{
+  "name": "TecnovaIoT",
+  "version": "1.0.0",
+  "description": "Conecta un ESP32 a la plataforma IoT Tecnova (panel.ceetecnova.com) por MQTT sobre WebSocket seguro -- WiFi, credenciales, TLS y reconexion resueltos, variables por nombre.",
+  "keywords": ["iot", "mqtt", "esp32", "tecnova", "websocket", "wss"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pipe1391/TecnovaIoT.git"
+  },
+  "authors": [
+    {
+      "name": "Tecnova",
+      "email": "soporte@ceetecnova.com"
+    }
+  ],
+  "license": "MIT",
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "dependencies": {
+    "bblanchon/ArduinoJson": "^6.19.4"
+  },
+  "export": {
+    "include": [
+      "src",
+      "examples",
+      "library.properties",
+      "keywords.txt",
+      "README.md",
+      "LICENSE"
+    ]
+  }
+}
