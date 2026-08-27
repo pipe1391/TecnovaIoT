@@ -1,8 +1,9 @@
 # TecnovaIoT
 
 Librería para Arduino/ESP32 que conecta un dispositivo a la plataforma IoT
-de Tecnova ([panel.ceetecnova.com](https://panel.ceetecnova.com)) sin tener
-que lidiar con MQTT, TLS ni el protocolo del panel a mano.
+de Tecnova (credenciales por HTTPS, datos por MQTT sobre WebSocket seguro
+-- WSS) sin tener que lidiar con MQTT, TLS ni el protocolo del panel a
+mano.
 
 Este documento está escrito pensando en que quien lo lea puede estar
 recién empezando con IoT/ESP32 — no asume que ya sabés qué es MQTT, TLS o
@@ -251,17 +252,18 @@ especial para el hardware.
 
 La librería trae embebido (`src/TecnovaRootCaBundle.h`) un bundle mínimo de
 Autoridades Certificadoras raíz (GlobalSign Root CA + ISRG Root X1) --
-necesario para validar el certificado que presenta
-`panel.ceetecnova.com` al conectar por WSS. Es el mismo para **cualquier**
-dispositivo de **cualquier** usuario que hable con esta plataforma -- no
-hay que regenerarlo por dispositivo, porque valida al *servidor*, no al
-dispositivo que se conecta.
+necesario para validar el certificado que presenta el broker al conectar
+por WSS. Es el mismo para **cualquier** dispositivo de **cualquier**
+usuario que hable con esta plataforma -- no hay que regenerarlo por
+dispositivo, porque valida al *servidor*, no al dispositivo que se
+conecta.
 
 Solo habría que regenerarlo si el servidor rotara a una Autoridad
-Certificadora fuera de esas dos. Para revisar la cadena real:
+Certificadora fuera de esas dos. Para revisar la cadena real de un
+servidor (reemplazando `<host>` por el que corresponda):
 
 ```bash
-openssl s_client -connect panel.ceetecnova.com:443 -showcerts
+openssl s_client -connect <host>:443 -showcerts
 ```
 
 ## Compatibilidad de versiones del core ESP32

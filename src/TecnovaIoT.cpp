@@ -9,14 +9,6 @@
 
 namespace
 {
-	// Los dos endpoints de la plataforma no van como texto plano en el
-	// fuente, para que no aparezcan con un grep/Ctrl+F directo en el repo
-	// (que es publico). OJO: esto es una molestia para el curioso casual,
-	// NO seguridad real -- terminan en texto plano igual en el firmware
-	// compilado y en el trafico de red (el SNI de TLS manda el hostname
-	// sin cifrar). La seguridad real esta del lado del servidor
-	// (autenticacion por dId+password, politicas de acceso), no en que el
-	// nombre del dominio sea dificil de encontrar. Ver README.
 	const uint8_t _OBF_KEY = 0x5a;
 
 	String _deobfuscate(const uint8_t *data, size_t len)

@@ -1,13 +1,13 @@
-// TecnovaIoT -- cliente para conectar un ESP32 a la plataforma IoT Tecnova
-// (panel.ceetecnova.com).
+// TecnovaIoT -- cliente para conectar un ESP32 a la plataforma IoT Tecnova.
 //
 // Se encarga de todo lo necesario para que un dispositivo hable con el
-// panel: conectar WiFi, autenticarse contra el webhook del dispositivo,
-// validar el certificado TLS del broker, conectar y mantener la sesión
-// MQTT sobre WebSocket seguro (wss://), reconectar solo ante cortes, y
-// mapear los topics del protocolo de Tecnova a nombres de variable legibles
-// -- para que el código del proyecto solo tenga que preocuparse por leer
-// sus sensores y reaccionar a comandos, no por MQTT ni TLS.
+// panel: conectar WiFi, autenticarse por HTTPS contra el webhook del
+// dispositivo, validar el certificado TLS del broker, conectar y mantener
+// la sesión MQTT sobre WebSocket seguro (WSS), reconectar solo ante
+// cortes, y mapear los topics del protocolo de Tecnova a nombres de
+// variable legibles -- para que el código del proyecto solo tenga que
+// preocuparse por leer sus sensores y reaccionar a comandos, no por MQTT
+// ni TLS.
 //
 // Uso típico:
 //

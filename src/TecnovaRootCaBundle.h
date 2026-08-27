@@ -2,23 +2,23 @@
 // usar #include <TecnovaIoT.h>.
 //
 // Bundle minimo de CA raiz para validar el certificado TLS del broker MQTT
-// (WSS) de panel.ceetecnova.com, via arduino_esp_crt_bundle_set().
+// (WSS) de la plataforma, via arduino_esp_crt_bundle_set().
 //
 // Contiene 2 certificados raiz autofirmados, en el formato binario que
 // espera esp_crt_bundle (num_certs + por cada uno: name_len, key_len,
 // nombre DER, clave publica DER), generados a partir de la cadena real
-// que presenta panel.ceetecnova.com:
+// que presenta el servidor:
 //   - GlobalSign Root CA   (la que efectivamente firma la cadena hoy:
-//     panel.ceetecnova.com -> Google Trust Services WE1 -> GTS Root R4
-//     -> cross-firmado por GlobalSign Root CA)
-//   - ISRG Root X1         (Let's Encrypt, de respaldo por si Cloudflare
+//     certificado del servidor -> Google Trust Services WE1 -> GTS Root
+//     R4 -> cross-firmado por GlobalSign Root CA)
+//   - ISRG Root X1         (Let's Encrypt, de respaldo por si el proveedor
 //     rota a otra Autoridad Certificadora)
 //
 // Es independiente del dispositivo/usuario: sirve igual para cualquier
-// device que se conecte a panel.ceetecnova.com. Solo habria que
-// regenerarlo si el servidor rotara a una CA fuera de estas dos -- para
-// eso, revisar la cadena real con:
-//   openssl s_client -connect panel.ceetecnova.com:443 -showcerts
+// device que se conecte a esta plataforma. Solo habria que regenerarlo si
+// el servidor rotara a una CA fuera de estas dos -- para eso, revisar la
+// cadena real del servidor con:
+//   openssl s_client -connect <host>:443 -showcerts
 //
 // Es un simple arreglo de C (no un archivo .bin embebido vía build config):
 // compila igual con cualquier IDE/herramienta (Arduino IDE, PlatformIO,
