@@ -9,8 +9,48 @@
 
 namespace
 {
-	const char *TECNOVA_WEBHOOK_ENDPOINT = "https://panel.ceetecnova.com/api/getdevicecredentials";
-	const char *TECNOVA_MQTT_URI = "wss://panel.ceetecnova.com/mqtt";
+	// Los dos endpoints de la plataforma no van como texto plano en el
+	// fuente, para que no aparezcan con un grep/Ctrl+F directo en el repo
+	// (que es publico). OJO: esto es una molestia para el curioso casual,
+	// NO seguridad real -- terminan en texto plano igual en el firmware
+	// compilado y en el trafico de red (el SNI de TLS manda el hostname
+	// sin cifrar). La seguridad real esta del lado del servidor
+	// (autenticacion por dId+password, politicas de acceso), no en que el
+	// nombre del dominio sea dificil de encontrar. Ver README.
+	const uint8_t _OBF_KEY = 0x5a;
+
+	String _deobfuscate(const uint8_t *data, size_t len)
+	{
+		String out;
+		out.reserve(len);
+		for (size_t i = 0; i < len; i++)
+		{
+			out += (char)(data[i] ^ _OBF_KEY);
+		}
+		return out;
+	}
+
+	// Endpoint del webhook de credenciales (XOR con _OBF_KEY).
+	const uint8_t _WEBHOOK_ENDPOINT_OBF[] PROGMEM = {
+		0x32, 0x2e, 0x2e, 0x2a, 0x29, 0x60, 0x75, 0x75, 0x2a, 0x3b, 0x34, 0x3f, 0x36, 0x74, 0x39, 0x3f,
+		0x3f, 0x2e, 0x3f, 0x39, 0x34, 0x35, 0x2c, 0x3b, 0x74, 0x39, 0x35, 0x37, 0x75, 0x3b, 0x2a, 0x33,
+		0x75, 0x3d, 0x3f, 0x2e, 0x3e, 0x3f, 0x2c, 0x33, 0x39, 0x3f, 0x39, 0x28, 0x3f, 0x3e, 0x3f, 0x34,
+		0x2e, 0x33, 0x3b, 0x36, 0x29};
+
+	// URI del broker MQTT (XOR con _OBF_KEY).
+	const uint8_t _MQTT_URI_OBF[] PROGMEM = {
+		0x2d, 0x29, 0x29, 0x60, 0x75, 0x75, 0x2a, 0x3b, 0x34, 0x3f, 0x36, 0x74, 0x39, 0x3f, 0x3f, 0x2e,
+		0x3f, 0x39, 0x34, 0x35, 0x2c, 0x3b, 0x74, 0x39, 0x35, 0x37, 0x75, 0x37, 0x2b, 0x2e, 0x2e};
+
+	String _webhookEndpoint()
+	{
+		return _deobfuscate(_WEBHOOK_ENDPOINT_OBF, sizeof(_WEBHOOK_ENDPOINT_OBF));
+	}
+
+	String _mqttUri()
+	{
+		return _deobfuscate(_MQTT_URI_OBF, sizeof(_MQTT_URI_OBF));
+	}
 
 	const unsigned long WIFI_RETRY_DELAY_MS = 500;
 	const int WIFI_MAX_RETRIES = 10;
@@ -238,7 +278,7 @@ bool TecnovaIoT::_fetchCredentials()
 	WiFiClientSecure httpsClient;
 	httpsClient.setInsecure();
 	HTTPClient http;
-	http.begin(httpsClient, TECNOVA_WEBHOOK_ENDPOINT);
+	http.begin(httpsClient, _webhookEndpoint());
 	http.addHeader("Content-Type", "application/x-www-form-urlencoded");
 	int responseCode = http.POST(body);
 
@@ -310,6 +350,7 @@ bool TecnovaIoT::_fetchCredentials()
 void TecnovaIoT::_startMqtt()
 {
 	String clientId = "device_" + _deviceId + "_" + String(random(1, 9999));
+	String mqttUri = _mqttUri();
 
 	Serial.println("[TecnovaIoT] Conectando MQTT (WSS)...");
 
@@ -321,13 +362,13 @@ void TecnovaIoT::_startMqtt()
 	// vez de asumir una sola variante -- así la librería compila igual con
 	// arduino-esp32 2.x (IDF4) o 3.x (IDF5).
 #if ESP_IDF_VERSION_MAJOR >= 5
-	cfg.broker.address.uri = TECNOVA_MQTT_URI;
+	cfg.broker.address.uri = mqttUri.c_str();
 	cfg.broker.verification.crt_bundle_attach = arduino_esp_crt_bundle_attach;
 	cfg.credentials.username = _mqttUsername.c_str();
 	cfg.credentials.authentication.password = _mqttPassword.c_str();
 	cfg.credentials.client_id = clientId.c_str();
 #else
-	cfg.uri = TECNOVA_MQTT_URI;
+	cfg.uri = mqttUri.c_str();
 	cfg.crt_bundle_attach = arduino_esp_crt_bundle_attach;
 	cfg.username = _mqttUsername.c_str();
 	cfg.password = _mqttPassword.c_str();
