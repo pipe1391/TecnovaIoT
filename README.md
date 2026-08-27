@@ -17,6 +17,7 @@ un portal cautivo. Si ya conocés estos conceptos, andá directo a
 - [Conceptos básicos](#conceptos-básicos-para-quien-recién-empieza)
 - [Uso rápido](#uso-rápido)
 - [API](#api)
+- [Consumo de energía](#consumo-de-energía)
 - [Portal cautivo (TecnovaProvisioning)](#portal-cautivo-tecnovaprovisioning)
 - [Sobre el certificado TLS](#sobre-el-certificado-tls)
 - [Compatibilidad de versiones del core ESP32](#compatibilidad-de-versiones-del-core-esp32)
@@ -145,6 +146,7 @@ exactamente uno de estos.
 | [`DHT11Sensor`](examples/DHT11Sensor/DHT11Sensor.ino) | Temperatura y humedad con un DHT11 (el sensor "clásico" de los kits de iniciación). | `adafruit/DHT sensor library`, `adafruit/Adafruit Unified Sensor` |
 | [`RGBLed`](examples/RGBLed/RGBLed.ino) | **Actuador**: reacciona a un comando `onCommand()` para poner un color en un LED RGB por PWM. | Ninguna (solo `analogWrite`). |
 | [`GPSTracker`](examples/GPSTracker/GPSTracker.ino) | Latitud/longitud leyendo un módulo GPS NEO-6M/NEO-M8N por UART. | `mikalhart/TinyGPSPlus` |
+| [`DeepSleepSensor`](examples/DeepSleepSensor/DeepSleepSensor.ino) | Dispositivo a batería que se despierta, publica, y vuelve a dormir -- ver [Consumo de energía](#consumo-de-energía). | Ninguna. |
 
 Cada ejemplo trae en su propio encabezado el detalle de conexión física
 (qué pin va a qué pata del sensor) y, si hace falta, la línea exacta para
@@ -161,6 +163,71 @@ agregar a tu `platformio.ini`.
 | `setValue(nombreVariable, valor, save=false)` | Actualiza el valor de una variable (`float`, `int`, `bool`, `String` o `JsonVariant`). Se publica sola en el próximo ciclo, respetando la frecuencia configurada en el panel para esa variable. `save` indica si el backend debe guardar este valor en el historial. |
 | `isConnected()` | `true` si el MQTT está conectado ahora mismo. |
 | `printStats(out=Serial)` | Debug: tabla con el estado de cada variable. Throttle interno, no imprime más seguido que cada 2s aunque la llames en cada `loop()`. |
+| `enablePowerSave()` | Activa el modem-sleep de WiFi -- ahorra energía sin perder la sesión MQTT ni dejar de recibir comandos. Ver [Consumo de energía](#consumo-de-energía). |
+| `deepSleepSeconds(segundos)` | Apaga el ESP32 en deep sleep durante ese tiempo. **Solo para dispositivos que nunca reciben comandos.** No retorna -- ver [Consumo de energía](#consumo-de-energía). |
+
+## Consumo de energía
+
+Si tu dispositivo va a funcionar a batería, esto es importante. MQTT
+funciona por **empuje** (push): el broker manda el mensaje apenas alguien
+publica algo, no hay forma de "pedirlo" después. Eso divide a los
+dispositivos en dos familias, con estrategias de ahorro distintas -- y la
+que corresponde depende de si tu dispositivo **recibe comandos o no**,
+no de qué tan seguido publica.
+
+### Dispositivos que SOLO publican (sensores)
+
+Si tu dispositivo nunca tiene una variable de tipo `output` con
+`onCommand()` registrado -- no importa que esté "sordo" un rato, porque
+nadie le va a mandar nada -- podés usar **deep sleep**: apaga
+prácticamente todo el ESP32 entre lecturas (consumo de microamperios,
+meses o años de batería) y se despierta solo por temporizador.
+
+```cpp
+tecnova.setValue("temperatura", leerTemperatura());
+
+unsigned long inicio = millis();
+while (millis() - inicio < 8000) { // le da tiempo a publicar de verdad
+  tecnova.loop();
+  delay(50);
+}
+
+tecnova.deepSleepSeconds(5 * 60); // duerme 5 minutos; no retorna
+```
+
+Ver el ejemplo completo en
+[`examples/DeepSleepSensor`](examples/DeepSleepSensor/DeepSleepSensor.ino).
+
+**Ojo con esto:** para el ESP32, despertar de un deep sleep es
+indistinguible de un reinicio -- vuelve a correr `setup()` desde cero,
+reconectando WiFi y MQTT cada vez. Eso tiene un costo real de tiempo (unos
+segundos) y de batería por ciclo, así que este patrón rinde con
+intervalos de **minutos**, no de segundos -- si necesitás publicar muy
+seguido, no te conviene dormir, usá el patrón normal (`examples/BasicSensor`).
+
+### Dispositivos que RECIBEN comandos (actuadores) o son MIXTOS
+
+Si tu dispositivo tiene aunque sea una variable con `onCommand()`
+registrado, **no uses `deepSleepSeconds()`**: un comando que llegue
+mientras el dispositivo está dormido se pierde para siempre (esta
+librería usa QoS 0 -- sin cola de mensajes pendientes en el broker). En
+su lugar, usá `enablePowerSave()` después de `begin()`:
+
+```cpp
+tecnova.begin(WIFI_SSID, WIFI_PASSWORD);
+tecnova.enablePowerSave(); // el radio WiFi ahorra energia entre actividad,
+                            // pero la sesion MQTT sigue viva
+```
+
+Esto activa el modo de ahorro de energía del radio WiFi (se apaga entre
+los "beacons" periódicos del router y se prende justo para escucharlos,
+en vez de estar recibiendo todo el tiempo). El ahorro es bastante más
+modesto que un deep sleep, pero el dispositivo **sigue alcanzable en todo
+momento** -- con algo más de latencia (de milisegundos a un par de
+segundos) para recibir un comando.
+
+Ver el ejemplo completo en
+[`examples/RGBLed`](examples/RGBLed/RGBLed.ino).
 
 ## Portal cautivo (TecnovaProvisioning)
 

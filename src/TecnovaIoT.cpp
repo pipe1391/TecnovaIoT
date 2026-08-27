@@ -5,6 +5,7 @@
 #include <HTTPClient.h>
 #include "esp_crt_bundle.h"
 #include "esp_idf_version.h"
+#include "esp_sleep.h"
 #include "TecnovaRootCaBundle.h"
 
 namespace
@@ -221,6 +222,38 @@ void TecnovaIoT::printStats(Stream &out)
 
 	out.printf("\nFree RAM -> %u bytes\n", ESP.getFreeHeap());
 	out.printf("Last incoming msg -> %s\n", _lastReceivedMsg.c_str());
+}
+
+void TecnovaIoT::enablePowerSave()
+{
+	// WIFI_PS_MIN_MODEM: el radio WiFi se apaga entre "beacons" (los
+	// paquetes periódicos que manda el router) y se prende justo para
+	// escucharlos, en vez de estar recibiendo todo el tiempo. El access
+	// point bufferea lo que llegue mientras tanto y lo entrega en el
+	// próximo beacon -- por eso hay algo más de latencia, pero la sesión
+	// MQTT sigue viva y el dispositivo sigue recibiendo comandos.
+	WiFi.setSleep(WIFI_PS_MIN_MODEM);
+	Serial.println("[TecnovaIoT] Power save activado (WiFi modem-sleep) -- el dispositivo sigue alcanzable.");
+}
+
+void TecnovaIoT::deepSleepSeconds(uint64_t seconds)
+{
+	// esp_mqtt_client_publish() con QoS 0 es "fire and forget": la
+	// llamada vuelve apenas el dato se encola para enviar, no espera a
+	// que salga de verdad por el aire. Si apagáramos el WiFi al toque,
+	// una publicación reciente podría quedar a mitad de camino. Este
+	// delay es una espera prudencial, no una garantía perfecta -- para
+	// una confirmación real haría falta QoS 1 (no soportado todavía).
+	delay(500);
+
+	Serial.printf("[TecnovaIoT] Entrando en deep sleep por %llu s...\n", (unsigned long long)seconds);
+	Serial.flush();
+
+	esp_sleep_enable_timer_wakeup(seconds * 1000000ULL); // la API espera microsegundos
+	esp_deep_sleep_start();
+	// No hay código después de esta línea: esp_deep_sleep_start() nunca
+	// retorna. Al despertar, el ESP32 arranca de cero -- es indistinguible
+	// de un reset, vuelve a correr setup() desde el principio.
 }
 
 // ---- privado ----

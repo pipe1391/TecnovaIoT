@@ -70,6 +70,14 @@ void setup()
 	});
 
 	tecnova.begin(WIFI_SSID, WIFI_PASSWORD);
+
+	// Este dispositivo RECIBE comandos -- no puede dormir profundo (un
+	// comando que llegue mientras duerme se perdería, ver README, sección
+	// "Consumo de energía"). enablePowerSave() ahorra bastante menos que
+	// un deep sleep, pero mantiene al dispositivo alcanzable en todo
+	// momento -- es la opción correcta para actuadores y dispositivos
+	// mixtos (que publican Y reciben).
+	tecnova.enablePowerSave();
 }
 
 void loop()

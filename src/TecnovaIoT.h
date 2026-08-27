@@ -121,6 +121,37 @@ public:
 	// -- tiene un throttle interno, no imprime más seguido que cada 2s.
 	void printStats(Stream &out = Serial);
 
+	// ---- Consumo de energía ----
+	//
+	// MQTT funciona por "empuje" (push): el broker manda el mensaje apenas
+	// alguien publica, no hay forma de "pedirlo" después. Eso divide a los
+	// dispositivos en dos familias, con estrategias de ahorro distintas:
+	//
+	//   - Los que SOLO publican (sensores) pueden dormir profundo entre
+	//     lecturas -- no importa que estén "sordos" un rato, nadie les va
+	//     a mandar nada. Usar deepSleepSeconds().
+	//   - Los que RECIBEN comandos (actuadores) o son MIXTOS no pueden
+	//     dormir profundo sin más: si les llega un comando mientras están
+	//     dormidos, se pierde (esta librería usa QoS 0, sin cola en el
+	//     broker). Usar enablePowerSave() en su lugar -- ahorra bastante
+	//     menos, pero el dispositivo sigue alcanzable en todo momento.
+
+	// Reduce el consumo del radio WiFi manteniendo la sesión MQTT viva --
+	// para dispositivos que reciben comandos (onCommand) o son mixtos, y
+	// por eso no pueden usar deepSleepSeconds(). El ahorro es más modesto
+	// que un deep sleep, pero el dispositivo sigue recibiendo mensajes en
+	// todo momento (con algo más de latencia). Llamar después de begin().
+	void enablePowerSave();
+
+	// Le da tiempo a lo que esté pendiente de publicarse para salir
+	// realmente por la red, y apaga el ESP32 en modo deep sleep durante
+	// "seconds" segundos. SOLO para dispositivos que nunca necesitan
+	// recibir un comando (si este dispositivo tiene variables "output"
+	// registradas con onCommand(), no uses esto -- ver la nota de arriba).
+	// Al despertar, el ESP32 arranca de cero (vuelve a correr setup()); no
+	// hay "vuelve del sleep", es indistinguible de un reset.
+	void deepSleepSeconds(uint64_t seconds);
+
 private:
 	struct Variable
 	{
