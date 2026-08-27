@@ -129,6 +129,26 @@ ejemplo completo (sensor + actuador), o
 [`examples/CaptivePortal`](examples/CaptivePortal/CaptivePortal.ino) para
 la variante sin credenciales hardcodeadas (ver más abajo).
 
+### Más ejemplos (sensores y actuadores reales)
+
+Todos siguen el mismo patrón que el de arriba -- lo único que cambia entre
+uno y otro es CÓMO se lee el sensor o se maneja el actuador; la parte de
+TecnovaIoT (`setValue`/`onCommand`/`loop`) es idéntica siempre. Sirven
+también como referencia de cómo conectar tu propio sensor aunque no sea
+exactamente uno de estos.
+
+| Ejemplo | Qué muestra | Librería(s) extra necesaria(s) |
+|---|---|---|
+| [`PhSensor`](examples/PhSensor/PhSensor.ino) | Sensor analógico de pH (ej. DFRobot Gravity/SEN0161), lectura por ADC y calibración con dos puntos. | Ninguna (solo `analogRead`). |
+| [`BME280Sensor`](examples/BME280Sensor/BME280Sensor.ino) | Temperatura, humedad y presión por I2C con un BME280. | `adafruit/Adafruit BME280 Library`, `adafruit/Adafruit Unified Sensor` |
+| [`DHT11Sensor`](examples/DHT11Sensor/DHT11Sensor.ino) | Temperatura y humedad con un DHT11 (el sensor "clásico" de los kits de iniciación). | `adafruit/DHT sensor library`, `adafruit/Adafruit Unified Sensor` |
+| [`RGBLed`](examples/RGBLed/RGBLed.ino) | **Actuador**: reacciona a un comando `onCommand()` para poner un color en un LED RGB por PWM. | Ninguna (solo `analogWrite`). |
+| [`GPSTracker`](examples/GPSTracker/GPSTracker.ino) | Latitud/longitud leyendo un módulo GPS NEO-6M/NEO-M8N por UART. | `mikalhart/TinyGPSPlus` |
+
+Cada ejemplo trae en su propio encabezado el detalle de conexión física
+(qué pin va a qué pata del sensor) y, si hace falta, la línea exacta para
+agregar a tu `platformio.ini`.
+
 ## API
 
 | Método | Qué hace |
@@ -301,6 +321,15 @@ solución.
   devuelven `false` silenciosamente (revisá el valor de retorno) si el
   nombre no coincide con ninguna variable configurada para ese
   dispositivo en el panel -- el nombre tiene que ser EXACTO.
+- **`error: call of overloaded 'setValue(...)' is ambiguous`**: pasa
+  cuando le mandás a `setValue()` un valor de tipo `double` (por ejemplo,
+  el resultado de una función de una librería de sensor/GPS que devuelve
+  `double`, no `float`) -- el compilador no sabe si convertirlo al
+  overload `float` o al `int`, y ninguno de los dos es "más correcto" que
+  el otro, así que se niega a elegir. Se soluciona casteando a mano:
+  `tecnova.setValue("variable", (float)valor);` (ver
+  [`examples/GPSTracker`](examples/GPSTracker/GPSTracker.ino), que se topa
+  justo con este caso porque `TinyGPSPlus` devuelve `double`).
 
 ## Licencia
 

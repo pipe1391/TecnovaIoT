@@ -1,5 +1,22 @@
 #include "TecnovaProvisioning.h"
 
+// PlatformIO/Arduino compilan TODOS los .cpp de una librería como una sola
+// unidad, sin importar si el sketch usa este archivo en particular -- por
+// eso, sin este chequeo, cualquier proyecto que use TecnovaIoT (aunque
+// jamás llame a TecnovaProvisioning) dejaría de compilar si no tiene
+// WiFiManager instalada. __has_include() nos deja detectar en tiempo de
+// compilación si esa librería está disponible, y si no lo está, compilar
+// una versión "stub" (que avisa el error por Serial en vez de fallar la
+// build entera) -- así se cumple de verdad lo que dice el README: este
+// módulo es opcional.
+#if __has_include(<WiFiManager.h>)
+#define TECNOVA_HAS_WIFIMANAGER 1
+#else
+#define TECNOVA_HAS_WIFIMANAGER 0
+#endif
+
+#if TECNOVA_HAS_WIFIMANAGER
+
 #include <Preferences.h>
 #include <WiFiManager.h>
 
@@ -279,3 +296,41 @@ void forget()
 }
 
 } // namespace TecnovaProvisioning
+
+#else // !TECNOVA_HAS_WIFIMANAGER
+
+// No se encontró <WiFiManager.h> en este proyecto. En vez de romper la
+// compilación entera de TecnovaIoT (que sí funciona perfecto sin esto),
+// dejamos una implementación "stub": compila bien, pero si el sketch
+// realmente llama a alguna de estas funciones, avisa por Serial qué hay
+// que instalar en vez de fallar en silencio.
+namespace TecnovaProvisioning
+{
+
+void begin(String &outWifiSsid, String &outWifiPassword, String &outDeviceId, String &outDevicePassword,
+		   const char *apName, uint8_t configButtonPin)
+{
+	(void)outWifiSsid;
+	(void)outWifiPassword;
+	(void)outDeviceId;
+	(void)outDevicePassword;
+	(void)apName;
+	(void)configButtonPin;
+	Serial.println("[TecnovaProvisioning] ERROR: falta agregar tzapu/WiFiManager a tus lib_deps (ver README de TecnovaIoT, seccion \"Portal cautivo\").");
+	delay(5000);
+	ESP.restart();
+}
+
+void checkReconfigureButton(uint8_t configButtonPin, unsigned long holdMs)
+{
+	(void)configButtonPin;
+	(void)holdMs;
+}
+
+void forget()
+{
+}
+
+} // namespace TecnovaProvisioning
+
+#endif // TECNOVA_HAS_WIFIMANAGER
