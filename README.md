@@ -388,7 +388,10 @@ solución.
   variables de las que tu código espera**: `setValue()`/`onCommand()`
   devuelven `false` silenciosamente (revisá el valor de retorno) si el
   nombre no coincide con ninguna variable configurada para ese
-  dispositivo en el panel -- el nombre tiene que ser EXACTO.
+  dispositivo en el panel. La comparación **no distingue mayúsculas de
+  minúsculas** (`"Temperatura"` y `"temperatura"` matchean igual), pero
+  el resto del texto sí tiene que ser idéntico -- typos, espacios de más,
+  tildes, etc. sí importan.
 - **`error: call of overloaded 'setValue(...)' is ambiguous`**: pasa
   cuando le mandás a `setValue()` un valor de tipo `double` (por ejemplo,
   el resultado de una función de una librería de sensor/GPS que devuelve

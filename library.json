@@ -1,6 +1,6 @@
 {
   "name": "TecnovaIoT",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Conecta un ESP32 a la plataforma IoT Tecnova por MQTT sobre WebSocket seguro (WSS) -- WiFi, credenciales via HTTPS, TLS y reconexion resueltos, variables por nombre. Incluye un modulo opcional de portal cautivo (TecnovaProvisioning) para cargar credenciales sin tocar el codigo.",
   "keywords": ["iot", "mqtt", "esp32", "tecnova", "websocket", "wss"],
   "repository": {

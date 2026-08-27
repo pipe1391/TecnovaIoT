@@ -459,9 +459,15 @@ bool TecnovaIoT::_setValueByName(const String &variableName, const String &paylo
 
 int TecnovaIoT::_findVariableIndexByName(const String &variableName) const
 {
+	// Comparación insensible a mayúsculas/minúsculas a propósito: el
+	// nombre configurado en el panel ("variableFullName") lo escribe una
+	// persona a mano, y "Temperatura" vs "temperatura" es un error muy
+	// fácil de cometer de cualquiera de los dos lados (panel o código) --
+	// no tiene sentido que setValue()/onCommand() fallen en silencio por
+	// una diferencia de capitalización que no cambia el significado.
 	for (size_t i = 0; i < _variables.size(); i++)
 	{
-		if (_variables[i].fullName == variableName)
+		if (_variables[i].fullName.equalsIgnoreCase(variableName))
 		{
 			return (int)i;
 		}
