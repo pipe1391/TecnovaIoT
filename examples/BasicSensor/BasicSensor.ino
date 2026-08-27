@@ -25,9 +25,15 @@ void setup()
 
 	// Se registra ANTES de begin(): cuando llegue un comando para la
 	// variable "led" (el nombre configurado en el panel), se llama a este
-	// callback con el JSON recibido, ej {"value":"true"}.
+	// callback con el JSON recibido -- puede llegar como booleano nativo
+	// ({"value":true}) o como texto ({"value":"true"}) segun como este
+	// configurada la variable en el panel. Comparar solo contra el string
+	// "true" falla en silencio si llega un booleano real (son tipos
+	// distintos para ArduinoJson, nunca son "iguales" aunque representen
+	// lo mismo) -- por eso se contemplan los dos casos.
 	tecnova.onCommand("led", [](JsonVariant value) {
-		bool encender = (value["value"] == "true");
+		JsonVariant v = value["value"];
+		bool encender = v.is<bool>() ? v.as<bool>() : (v.as<String>() == "true");
 		digitalWrite(LED_PIN, encender ? HIGH : LOW);
 	});
 

@@ -111,7 +111,11 @@ void setup() {
   // Se registra ANTES de begin(). "led" debe ser el nombre EXACTO de la
   // variable configurada en el panel para este dispositivo.
   tecnova.onCommand("led", [](JsonVariant value) {
-    digitalWrite(LED_BUILTIN, value["value"] == "true" ? HIGH : LOW);
+    // El valor puede llegar como booleano nativo ({"value":true}) o como
+    // texto ({"value":"true"}) -- ver "Errores comunes" mas abajo.
+    JsonVariant v = value["value"];
+    bool encender = v.is<bool>() ? v.as<bool>() : (v.as<String>() == "true");
+    digitalWrite(LED_BUILTIN, encender ? HIGH : LOW);
   });
 
   tecnova.begin("<ssid_wifi>", "<password_wifi>");
@@ -392,6 +396,19 @@ solución.
   minúsculas** (`"Temperatura"` y `"temperatura"` matchean igual), pero
   el resto del texto sí tiene que ser idéntico -- typos, espacios de más,
   tildes, etc. sí importan.
+- **`onCommand()` se dispara pero el actuador nunca "prende"**: revisá con
+  qué *tipo* llega el valor, no solo con qué valor. Para una variable
+  booleana, el panel puede mandar `{"value":true}` (booleano JSON nativo)
+  o `{"value":"true"}` (texto) según cómo esté configurada -- son tipos
+  distintos para ArduinoJson, y `value["value"] == "true"` da `false`
+  **siempre** si lo que llegó fue un booleano de verdad (nunca son
+  "iguales" entre sí, aunque representen lo mismo). Se soluciona
+  contemplando los dos casos: `JsonVariant v = value["value"]; bool x =
+  v.is<bool>() ? v.as<bool>() : (v.as<String>() == "true");` (así están
+  escritos ya los ejemplos `BasicSensor` y `CaptivePortal`, que reciben un
+  booleano). El síntoma es engañoso: `printStats()`/`Last incoming msg` muestran que el
+  comando llegó bien, y el `Count` de la variable sube -- el problema está
+  puntualmente en la comparación de tipos, no en la conexión.
 - **`error: call of overloaded 'setValue(...)' is ambiguous`**: pasa
   cuando le mandás a `setValue()` un valor de tipo `double` (por ejemplo,
   el resultado de una función de una librería de sensor/GPS que devuelve
