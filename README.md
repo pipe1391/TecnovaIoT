@@ -139,7 +139,8 @@ exactamente uno de estos.
 
 | Ejemplo | Qué muestra | Librería(s) extra necesaria(s) |
 |---|---|---|
-| [`PhSensor`](examples/PhSensor/PhSensor.ino) | Sensor analógico de pH (ej. DFRobot Gravity/SEN0161), lectura por ADC y calibración con dos puntos. | Ninguna (solo `analogRead`). |
+| [`PhSensor`](examples/PhSensor/PhSensor.ino) | Sensor analógico de pH (ej. DFRobot Gravity/SEN0161) leído a través de un ADS1115 (ADC externo de 16 bits), no con el ADC interno del ESP32 -- el propio ejemplo explica por qué. Calibración con dos puntos. | `adafruit/Adafruit ADS1X15` |
+| [`ADS1115`](examples/ADS1115/ADS1115.ino) | Plantilla genérica: leer los 4 canales de un ADS1115 (ADC externo por I2C) -- útil como base para cualquier sensor analógico que necesite más precisión que el ADC interno del ESP32. | `adafruit/Adafruit ADS1X15` |
 | [`BME280Sensor`](examples/BME280Sensor/BME280Sensor.ino) | Temperatura, humedad y presión por I2C con un BME280. | `adafruit/Adafruit BME280 Library`, `adafruit/Adafruit Unified Sensor` |
 | [`DHT11Sensor`](examples/DHT11Sensor/DHT11Sensor.ino) | Temperatura y humedad con un DHT11 (el sensor "clásico" de los kits de iniciación). | `adafruit/DHT sensor library`, `adafruit/Adafruit Unified Sensor` |
 | [`RGBLed`](examples/RGBLed/RGBLed.ino) | **Actuador**: reacciona a un comando `onCommand()` para poner un color en un LED RGB por PWM. | Ninguna (solo `analogWrite`). |
