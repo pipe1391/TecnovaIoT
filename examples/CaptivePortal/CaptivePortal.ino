@@ -38,9 +38,6 @@ void setup()
 	Serial.begin(921600);
 	pinMode(LED_PIN, OUTPUT);
 
-	// Se registra ANTES de crear TecnovaIoT: "led" debe ser el nombre
-	// EXACTO de una variable de tipo actuador configurada para este
-	// dispositivo en el panel.
 	String wifiSsid, wifiPassword, deviceId, devicePassword;
 	TecnovaProvisioning::begin(wifiSsid, wifiPassword, deviceId, devicePassword);
 
@@ -48,6 +45,8 @@ void setup()
 	// TecnovaIoT se crea despues de la llamada anterior, no antes.
 	tecnova = new TecnovaIoT(deviceId, devicePassword);
 
+	// Se registra ANTES de begin(): "led" debe ser el nombre EXACTO de una
+	// variable de tipo actuador configurada para este dispositivo en el panel.
 	tecnova->onCommand("led", [](JsonVariant value) {
 		// El valor puede llegar como booleano nativo ({"value":true}) o
 		// como texto ({"value":"true"}) segun como este configurada la
