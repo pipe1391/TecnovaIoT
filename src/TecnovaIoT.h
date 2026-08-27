@@ -28,7 +28,28 @@
 //     tecnova.setValue("temperatura", leerTemperatura());
 //   }
 //
-// Ver examples/BasicSensor para un ejemplo completo.
+// Ver examples/BasicSensor para un ejemplo completo, y
+// examples/CaptivePortal si preferís cargar las credenciales desde un
+// portal cautivo en vez de escribirlas en el código (ver
+// TecnovaProvisioning.h y el README).
+//
+// NOTA PARA QUIEN LEA/MODIFIQUE ESTE CÓDIGO: adentro (ver la sección
+// "private" más abajo) hay dos detalles de implementación que vale la
+// pena entender, no solo copiar:
+//   - _mutex: `mqtt_event_handler` (los callbacks de MQTT_EVENT_DATA,
+//     MQTT_EVENT_CONNECTED, etc.) corren en una tarea de FreeRTOS
+//     DISTINTA a la que ejecuta tu setup()/loop() -- el propio driver
+//     esp_mqtt_client se maneja así internamente. Eso significa que dos
+//     "hilos" distintos pueden intentar leer/escribir _variables al mismo
+//     tiempo (uno cuando llega un mensaje, otro cuando loop() llama a
+//     setValue() o al publicador automático). Sin protegerlo con un mutex,
+//     eso puede corromper la memoria de forma intermitente y muy difícil
+//     de reproducir. Por eso CUALQUIER acceso a _variables está envuelto
+//     en xSemaphoreTake/xSemaphoreGive.
+//   - _pendingCallbacks: cuando llamás a onCommand(), todavía no sabemos
+//     qué variables tiene el dispositivo (eso se entera recién adentro de
+//     begin(), al consultar el panel) -- por eso los callbacks se guardan
+//     "pendientes" y se conectan con la Variable real más adelante.
 //
 // Repositorio: https://github.com/pipe1391/TecnovaIoT
 
