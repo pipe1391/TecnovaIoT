@@ -60,6 +60,10 @@ void setup()
 	// El WiFi ya quedo conectado por TecnovaProvisioning::begin() -- este
 	// begin() lo detecta solo y no vuelve a intentar conectarse.
 	tecnova->begin(wifiSsid.c_str(), wifiPassword.c_str());
+
+	// Confirma que las credenciales cargadas sirvieron de verdad -- ver la
+	// nota de "RECUPERACION AUTOMATICA" en TecnovaProvisioning.h.
+	TecnovaProvisioning::confirmSuccess();
 }
 
 void loop()

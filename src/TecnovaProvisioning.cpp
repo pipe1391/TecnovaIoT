@@ -65,6 +65,11 @@
 
 namespace
 {
+	// Cuantos arranques fallidos seguidos (sin llegar a confirmSuccess())
+	// tolera begin() antes de reabrir el portal por su cuenta -- ver la
+	// nota de "RECUPERACION AUTOMATICA" en TecnovaProvisioning.h.
+	const int MAX_BOOT_FAILURES = 3;
+
 	// ------------------------------------------------------------------------
 	// Estilo del portal: paleta neutra de un solo color de acento, como usan
 	// los dispositivos IoT "serios" (routers, camaras, asistentes de voz) en
@@ -155,6 +160,25 @@ void begin(String &outWifiSsid, String &outWifiPassword, String &outDeviceId, St
 {
 	pinMode(configButtonPin, INPUT_PULLUP);
 
+	// Recuperacion automatica (ver la nota completa en el .h): cuenta los
+	// arranques seguidos que NO terminaron en un confirmSuccess(). Si se
+	// pasa de MAX_BOOT_FAILURES, algo esta mal con lo que hay guardado
+	// (WiFi que no conecta, o credenciales de dispositivo que el panel
+	// rechaza) y loop() -- donde se revisa el boton -- nunca se llega a
+	// ejecutar. En vez de quedar reiniciando en loop para siempre, se
+	// fuerza el portal solo, sin que haga falta tocar nada.
+	int bootFailures = _loadPref("boot_fails").toInt() + 1;
+	bool tooManyFailures = (bootFailures >= MAX_BOOT_FAILURES);
+	if (tooManyFailures)
+	{
+		Serial.printf("[TecnovaProvisioning] %d arranques seguidos sin exito -- reabriendo el portal automaticamente.\n", bootFailures);
+		_savePref("boot_fails", "0");
+	}
+	else
+	{
+		_savePref("boot_fails", String(bootFailures));
+	}
+
 	// Paso 1: ver que tenemos guardado de arranques anteriores.
 	outDeviceId = _loadPref("device_id");
 	outDevicePassword = _loadPref("device_pass");
@@ -164,8 +188,8 @@ void begin(String &outWifiSsid, String &outWifiPassword, String &outDeviceId, St
 	// leemos UNA vez y la borramos enseguida ("se consume"), para que en el
 	// SIGUIENTE reinicio (una vez resuelto el portal) no se vuelva a abrir
 	// solo sin que nadie lo pida.
-	bool forcePortal = (_loadPref("force_portal") == "1");
-	if (forcePortal)
+	bool forcePortal = (_loadPref("force_portal") == "1") || tooManyFailures;
+	if (_loadPref("force_portal") == "1")
 	{
 		_prefs.begin("tecnova", false);
 		_prefs.remove("force_portal");
@@ -295,6 +319,11 @@ void forget()
 	_prefs.end();
 }
 
+void confirmSuccess()
+{
+	_savePref("boot_fails", "0");
+}
+
 } // namespace TecnovaProvisioning
 
 #else // !TECNOVA_HAS_WIFIMANAGER
@@ -328,6 +357,10 @@ void checkReconfigureButton(uint8_t configButtonPin, unsigned long holdMs)
 }
 
 void forget()
+{
+}
+
+void confirmSuccess()
 {
 }
 

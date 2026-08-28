@@ -287,6 +287,10 @@ void setup() {
   // DESPUES de la línea anterior, no antes.
   tecnova = new TecnovaIoT(deviceId, devicePassword);
   tecnova->begin(wifiSsid.c_str(), wifiPassword.c_str());
+
+  // Confirma que las credenciales cargadas sirvieron de verdad -- ver
+  // "Qué pasa si cargás datos incorrectos" mas abajo.
+  TecnovaProvisioning::confirmSuccess();
 }
 
 void loop() {
@@ -314,6 +318,29 @@ Ver el ejemplo completo en
    apretado el botón **BOOT** 3 segundos. Se reinicia solo y vuelve a
    mostrar el portal.
 
+### Qué pasa si cargás datos incorrectos (recuperación automática)
+
+Puede pasar -- a propósito o por error -- que cargues un `dId`/password que
+el panel rechaza, o una red WiFi que nunca conecta. En ese caso,
+`TecnovaIoT`/`WiFiManager` reinician el ESP32 solos desde *adentro* de
+`begin()`, sin llegar nunca a `loop()` -- y como `checkReconfigureButton()`
+vive en `loop()`, **mantener apretado el botón no hace nada**: no hay
+código corriendo todavía que lo esté escuchando. Sin ningún mecanismo
+extra, el dispositivo quedaría reiniciando en loop para siempre, sin
+forma de recuperarlo salvo reprogramarlo por USB.
+
+Por eso `TecnovaProvisioning::begin()` lleva la cuenta (persistida en NVS)
+de cuántos arranques seguidos NO terminaron en un
+`TecnovaProvisioning::confirmSuccess()`. Al tercer arranque fallido
+seguido, **reabre el portal por su cuenta**, sin que haga falta tocar
+ningún botón -- solo hay que conectarse de nuevo a `TecnovaIoT-Setup` y
+cargar los datos correctos esta vez.
+
+Por esto es importante llamar a `confirmSuccess()` -- si tu sketch no lo
+llama nunca, `begin()` va a pensar que TODOS los arranques fallan, y va a
+terminar reabriendo el portal solo cada 3 reinicios aunque las
+credenciales estén perfectas.
+
 ### Por qué el botón se revisa "en caliente" y no al resetear
 
 Es un detalle de hardware que vale la pena entender, porque es un error
@@ -336,7 +363,8 @@ especial para el hardware.
 
 | Función | Qué hace |
 |---|---|
-| `TecnovaProvisioning::begin(wifiSsid, wifiPassword, deviceId, devicePassword, apName="TecnovaIoT-Setup", configButtonPin=0)` | Junta las 4 credenciales (de NVS o del portal) y deja el WiFi conectado. Bloqueante. |
+| `TecnovaProvisioning::begin(wifiSsid, wifiPassword, deviceId, devicePassword, apName="TecnovaIoT-Setup", configButtonPin=0)` | Junta las 4 credenciales (de NVS o del portal) y deja el WiFi conectado. Bloqueante. Reabre el portal solo si los últimos 3 arranques fallaron. |
+| `TecnovaProvisioning::confirmSuccess()` | Llamar justo después de que `tecnova->begin()` retorne. Resetea el contador de arranques fallidos que usa la recuperación automática. |
 | `TecnovaProvisioning::checkReconfigureButton(configButtonPin=0, holdMs=3000)` | Llamar en cada `loop()`. Reabre el portal si se mantiene el botón apretado. |
 | `TecnovaProvisioning::forget()` | Borra el `dId`/password guardados (no toca el WiFi), para forzar reconfiguración completa. |
 
