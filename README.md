@@ -16,6 +16,8 @@ un portal cautivo. Si ya conocés estos conceptos, andá directo a
 - [Instalación](#instalación)
 - [Conceptos básicos](#conceptos-básicos-para-quien-recién-empieza)
 - [Uso rápido](#uso-rápido)
+- [Variables que miden y variables que accionan](#variables-que-miden-y-variables-que-accionan)
+- [Qué manda cada control del panel](#qué-manda-exactamente-cada-control-del-panel)
 - [API](#api)
 - [Consumo de energía](#consumo-de-energía)
 - [Portal cautivo (TecnovaProvisioning)](#portal-cautivo-tecnovaprovisioning)
@@ -109,13 +111,12 @@ void setup() {
   Serial.begin(921600);
 
   // Se registra ANTES de begin(). "led" debe ser el nombre EXACTO de la
-  // variable configurada en el panel para este dispositivo.
+  // variable configurada en el panel para este dispositivo, y esa variable
+  // tiene que estar marcada como "El panel la acciona" (ver más abajo).
   tecnova.onCommand("led", [](JsonVariant value) {
-    // El valor puede llegar como booleano nativo ({"value":true}) o como
-    // texto ({"value":"true"}) -- ver "Errores comunes" mas abajo.
-    JsonVariant v = value["value"];
-    bool encender = v.is<bool>() ? v.as<bool>() : (v.as<String>() == "true");
-    digitalWrite(LED_BUILTIN, encender ? HIGH : LOW);
+    // El interruptor del panel manda un booleano JSON. Se lee con
+    // .as<bool>() -- nunca comparando contra el texto "true".
+    digitalWrite(LED_BUILTIN, value["value"].as<bool>() ? HIGH : LOW);
   });
 
   tecnova.begin("<ssid_wifi>", "<password_wifi>");
@@ -134,6 +135,94 @@ ejemplo completo (sensor + actuador), o
 [`examples/CaptivePortal`](examples/CaptivePortal/CaptivePortal.ino) para
 la variante sin credenciales hardcodeadas (ver más abajo).
 
+### Variables que MIDEN y variables que ACCIONAN
+
+Al crear una variable en el panel (sección **Variables**) hay que
+contestar una pregunta: **"¿Qué hace esta variable?"**.
+
+| Respuesta en el panel | Qué es | Cómo se usa desde el código |
+|---|---|---|
+| **El equipo la mide** | Un sensor: temperatura, humedad, nivel de un estanque. | Se publica con `setValue()`. |
+| **El panel la acciona** | Un actuador: una luz, un relé, una bomba. | Se recibe con `onCommand()`. |
+
+Si te equivocás acá no salta ningún error, y por eso conviene mirarlo: el
+panel te va a dejar ponerle un interruptor igual y el comando va a llegar
+lo mismo. Lo que te vas a perder es todo lo demás -- esa variable **no
+aparece en Automatizaciones** (así que no podés escribir "si oscurece,
+encendé la luz"), y la lista de Variables te muestra una "frecuencia de
+envío" que en un actuador no significa nada.
+
+Al revés sí es mudo de verdad: `setValue()` sobre una variable de salida
+**no publica nada**, aunque devuelva `true` (la librería te lo avisa por
+el monitor serie la primera vez que lo intentás).
+
+> **Si venís de antes del 25 de septiembre de 2026**, revisá tus
+> actuadores uno por uno: hasta esa fecha toda variable creada a mano en
+> **Variables** quedaba como "El equipo la mide", porque la pregunta ni
+> siquiera se hacía. Se corrige entrando a la variable y cambiando la
+> respuesta.
+
+### Qué manda exactamente cada control del panel
+
+El valor lo decide el **tipo de control** que pongas en el panel, y
+siempre llega **tipado**. No hay ningún control que mande texto.
+
+| Control en el panel | Qué publica | Cómo se lee en el firmware |
+|---|---|---|
+| **Interruptor** | `{"value": true}` / `{"value": false}` | `value["value"].as<bool>()` |
+| **Botón de pulso** | `{"value": true}` — siempre, no tiene estado | `value["value"].as<bool>()` |
+| **Deslizador** | `{"value": 128}` — un número | `value["value"].as<int>()` o `.as<float>()` |
+
+Tres cosas que ahorran una tarde:
+
+- **Para encender y apagar, usá un Interruptor, no un Botón.** Un botón
+  de pulso manda siempre `true`: sirve para abrir una cerradura o dar un
+  riego, pero nunca va a poder apagar nada.
+- **Nunca compares contra el texto `"true"`.** `value["value"] == "true"`
+  da `false` ante un booleano JSON -- para ArduinoJson son tipos
+  distintos y nunca son "iguales", aunque representen lo mismo. El
+  comando llega, el actuador no se mueve, y no hay ningún error a la
+  vista.
+- **Adentro de `onCommand()` no uses `delay()` ni lazos largos.** Ese
+  código **no corre en `loop()`**: corre en la tarea que atiende el MQTT.
+  Si la trabás unos segundos, el equipo deja de recibir y se puede
+  desconectar solo. Para una acción que dura (un riego de 5 s, una
+  cerradura), en el callback solo anotá qué hay que hacer y apagá desde
+  `loop()`:
+
+  ```cpp
+  unsigned long regandoHasta = 0;
+
+  tecnova.onCommand("riego", [](JsonVariant value) {
+    digitalWrite(BOMBA, HIGH);
+    regandoHasta = millis() + 5000;   // anotar, no esperar
+  });
+
+  void loop() {
+    tecnova.loop();
+    if (regandoHasta && millis() > regandoHasta) {
+      digitalWrite(BOMBA, LOW);
+      regandoHasta = 0;
+    }
+  }
+  ```
+
+> **De dónde venía el lío.** Hasta el 24 de septiembre de 2026 el botón
+> del panel publicaba, tal cual, el texto libre de un campo llamado
+> "Mensaje a enviar". Ese campo era opcional y solía quedar vacío, así
+> que salía al aire `{"value":""}` -- que todo firmware razonable lee
+> como "apagar". El campo ya no existe y ningún control lo lee.
+>
+> **Esto cambió en el panel, no en la librería**: aplica a tus
+> dispositivos hoy, tengan la versión de TecnovaIoT que tengan.
+> Actualizar la librería no cambia lo que publica el botón; lo que la
+> 1.4.0 arregla es la **documentación y los ejemplos**, que enseñaban a
+> leer el valor de una forma que ya no corresponde.
+>
+> Si tu código tiene la forma defensiva
+> `v.is<bool>() ? v.as<bool>() : (v.as<String>() == "true")`, sigue
+> funcionando, pero ya no hace falta: alcanza con `.as<bool>()`.
+
 ### Más ejemplos (sensores y actuadores reales)
 
 Todos siguen el mismo patrón que el de arriba -- lo único que cambia entre
@@ -148,7 +237,7 @@ exactamente uno de estos.
 | [`ADS1115`](examples/ADS1115/ADS1115.ino) | Plantilla genérica: leer los 4 canales de un ADS1115 (ADC externo por I2C) -- útil como base para cualquier sensor analógico que necesite más precisión que el ADC interno del ESP32. | `adafruit/Adafruit ADS1X15` |
 | [`BME280Sensor`](examples/BME280Sensor/BME280Sensor.ino) | Temperatura, humedad y presión por I2C con un BME280. | `adafruit/Adafruit BME280 Library`, `adafruit/Adafruit Unified Sensor` |
 | [`DHT11Sensor`](examples/DHT11Sensor/DHT11Sensor.ino) | Temperatura y humedad con un DHT11 (el sensor "clásico" de los kits de iniciación). | `adafruit/DHT sensor library`, `adafruit/Adafruit Unified Sensor` |
-| [`RGBLed`](examples/RGBLed/RGBLed.ino) | **Actuador**: reacciona a un comando `onCommand()` para poner un color en un LED RGB por PWM. | Ninguna (solo `analogWrite`). |
+| [`RGBLed`](examples/RGBLed/RGBLed.ino) | **Actuador**: tres variables de salida (`rojo`, `verde`, `azul`), cada una con un **Deslizador** de 0 a 255 en el panel, mezcladas por PWM. Muestra también el caso de varias salidas en un mismo dispositivo. | Ninguna (solo `analogWrite`). |
 | [`GPSTracker`](examples/GPSTracker/GPSTracker.ino) | Latitud/longitud leyendo un módulo GPS NEO-6M/NEO-M8N por UART. | `mikalhart/TinyGPSPlus` |
 | [`DeepSleepSensor`](examples/DeepSleepSensor/DeepSleepSensor.ino) | Dispositivo a batería que se despierta, publica, y vuelve a dormir -- ver [Consumo de energía](#consumo-de-energía). | Ninguna. |
 
@@ -161,10 +250,10 @@ agregar a tu `platformio.ini`.
 | Método | Qué hace |
 |---|---|
 | `TecnovaIoT(dId, password, jsonCapacity=4096)` | Constructor. `jsonCapacity` son los bytes reservados temporalmente para parsear la respuesta del webhook -- solo hace falta subirlo si tenés muchísimas variables. |
-| `onCommand(nombreVariable, callback)` | Registra qué hacer cuando llega un comando para esa variable. Llamar antes de `begin()`. |
+| `onCommand(nombreVariable, callback)` | Registra qué hacer cuando llega un comando para esa variable. Llamar antes de `begin()`. La variable tiene que estar marcada en el panel como **"El panel la acciona"**. El callback recibe el JSON completo (`{"value": ...}`) y el valor llega tipado según el control: booleano para interruptor y botón, número para deslizador. **No devuelve nada**: si el nombre no coincide con ninguna variable, el callback simplemente no se dispara nunca. **Corre en la tarea del MQTT, no en `loop()`** -- nada de `delay()` adentro. |
 | `begin(ssid, password)` | Conecta WiFi, pide credenciales, conecta MQTT. Bloqueante; reinicia el ESP32 solo si algo falla. Si el WiFi ya está conectado (por ejemplo, porque lo conectó `TecnovaProvisioning` antes), no vuelve a intentarlo. |
 | `loop()` | Llamar en cada vuelta de `loop()`. Publica variables vencidas y reconecta si hace falta. |
-| `setValue(nombreVariable, valor, save=false)` | Actualiza el valor de una variable (`float`, `int`, `bool`, `String` o `JsonVariant`). Se publica sola en el próximo ciclo, respetando la frecuencia configurada en el panel para esa variable. `save` indica si el backend debe guardar este valor en el historial. |
+| `setValue(nombreVariable, valor, save=false)` | Actualiza el valor de una variable (`float`, `int`, `bool`, `String` o `JsonVariant`). Se publica sola en el próximo ciclo, respetando la frecuencia configurada en el panel para esa variable. `save` indica si el backend debe guardar este valor en el historial. **Solo sirve en variables de entrada** ("El equipo la mide"): sobre una de salida devuelve `true` pero no publica nunca -- la librería avisa por el monitor serie la primera vez. |
 | `isConnected()` | `true` si el MQTT está conectado ahora mismo. |
 | `printStats(out=Serial)` | Debug: tabla con el estado de cada variable. Throttle interno, no imprime más seguido que cada 2s aunque la llames en cada `loop()`. |
 | `enablePowerSave()` | Activa el modem-sleep de WiFi -- ahorra energía sin perder la sesión MQTT ni dejar de recibir comandos. Ver [Consumo de energía](#consumo-de-energía). |
@@ -181,7 +270,8 @@ no de qué tan seguido publica.
 
 ### Dispositivos que SOLO publican (sensores)
 
-Si tu dispositivo nunca tiene una variable de tipo `output` con
+Si tu dispositivo nunca tiene una variable marcada en el panel como "El
+panel la acciona" con
 `onCommand()` registrado -- no importa que esté "sordo" un rato, porque
 nadie le va a mandar nada -- podés usar **deep sleep**: apaga
 prácticamente todo el ESP32 entre lecturas (consumo de microamperios,
@@ -417,26 +507,46 @@ solución.
   ves publicaciones muchísimo más seguido de lo esperado, revisá la
   configuración de esa variable en el panel.
 - **Compila pero no conecta, y en el panel el dispositivo tiene menos
-  variables de las que tu código espera**: `setValue()`/`onCommand()`
-  devuelven `false` silenciosamente (revisá el valor de retorno) si el
-  nombre no coincide con ninguna variable configurada para ese
-  dispositivo en el panel. La comparación **no distingue mayúsculas de
-  minúsculas** (`"Temperatura"` y `"temperatura"` matchean igual), pero
-  el resto del texto sí tiene que ser idéntico -- typos, espacios de más,
-  tildes, etc. sí importan.
-- **`onCommand()` se dispara pero el actuador nunca "prende"**: revisá con
-  qué *tipo* llega el valor, no solo con qué valor. Para una variable
-  booleana, el panel puede mandar `{"value":true}` (booleano JSON nativo)
-  o `{"value":"true"}` (texto) según cómo esté configurada -- son tipos
-  distintos para ArduinoJson, y `value["value"] == "true"` da `false`
-  **siempre** si lo que llegó fue un booleano de verdad (nunca son
-  "iguales" entre sí, aunque representen lo mismo). Se soluciona
-  contemplando los dos casos: `JsonVariant v = value["value"]; bool x =
-  v.is<bool>() ? v.as<bool>() : (v.as<String>() == "true");` (así están
-  escritos ya los ejemplos `BasicSensor` y `CaptivePortal`, que reciben un
-  booleano). El síntoma es engañoso: `printStats()`/`Last incoming msg` muestran que el
-  comando llegó bien, y el `Count` de la variable sube -- el problema está
+  variables de las que tu código espera**: es que el nombre no coincide
+  con ninguna variable configurada para ese dispositivo en el panel. Los
+  dos métodos avisan distinto: `setValue()` **devuelve `false`** (revisá
+  el valor de retorno), mientras que `onCommand()` **no devuelve nada**
+  -- ahí el síntoma es que el callback nunca se dispara. En los dos
+  casos, `printStats()` te lista los nombres que el panel devolvió de
+  verdad, que es la forma rápida de comparar. La comparación **no
+  distingue mayúsculas de minúsculas** (`"Temperatura"` y
+  `"temperatura"` matchean igual), pero el resto del texto sí tiene que
+  ser idéntico -- typos, espacios de más, tildes, etc. sí importan.
+- **`onCommand()` se dispara pero el actuador nunca "prende"**: casi
+  siempre es que estás comparando el valor contra el **texto** `"true"`.
+  El panel manda el valor tipado -- un interruptor publica el booleano
+  JSON `{"value":true}` -- y para ArduinoJson un booleano y el texto
+  `"true"` son tipos distintos, que **nunca** son "iguales" entre sí
+  aunque representen lo mismo. Así que `value["value"] == "true"` da
+  `false` siempre. Se lee con `value["value"].as<bool>()`. El síntoma es
+  engañoso: `printStats()`/`Last incoming msg` muestran que el comando
+  llegó bien y el `Count` de la variable sube -- el problema está
   puntualmente en la comparación de tipos, no en la conexión.
+- **El actuador funciona, pero el panel "no muestra" en qué estado
+  quedó**: es esperable. Una variable de salida no se publica nunca, y el
+  widget del interruptor refleja el comando que él mismo mandó, no un
+  reporte del equipo. Si llamás a `setValue()` sobre esa variable te va a
+  devolver `true` y no va a salir nada al aire -- desde la 1.4.0 la
+  librería te lo avisa una vez por el monitor serie. Si querés que el
+  equipo informe su estado real (por ejemplo, para confirmar que el relé
+  cerró), creá en el panel una **segunda variable de entrada**, del tipo
+  "El equipo la mide", y publicá esa.
+- **Aprieto el botón, el LED prende, pero nunca apaga**: un **Botón de
+  pulso** manda siempre `true`, no tiene estado; sirve para abrir una
+  cerradura o dar un riego, no para encender y apagar. Cambiá el widget
+  por un **Interruptor**.
+- **Antes del 25 de septiembre de 2026 el botón SOLO apagaba**: era otro
+  problema, el opuesto, y ya está resuelto del lado del panel. El botón
+  publicaba el texto libre de un campo "Mensaje a enviar" que casi
+  siempre quedaba vacío, así que salía `{"value":""}` y cualquier
+  firmware lo leía como "apagar". Ese campo ya no existe. **Es un cambio
+  del panel, no de la librería**: vale para cualquier versión que tengas
+  instalada, y actualizar la librería no cambia lo que publica el botón.
 - **`error: call of overloaded 'setValue(...)' is ambiguous`**: pasa
   cuando le mandás a `setValue()` un valor de tipo `double` (por ejemplo,
   el resultado de una función de una librería de sensor/GPS que devuelve

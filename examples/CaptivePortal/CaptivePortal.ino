@@ -46,15 +46,13 @@ void setup()
 	tecnova = new TecnovaIoT(deviceId, devicePassword);
 
 	// Se registra ANTES de begin(): "led" debe ser el nombre EXACTO de una
-	// variable de tipo actuador configurada para este dispositivo en el panel.
+	// variable de este dispositivo que en el panel este marcada como "El
+	// panel la acciona", con un INTERRUPTOR puesto en el panel.
 	tecnova->onCommand("led", [](JsonVariant value) {
-		// El valor puede llegar como booleano nativo ({"value":true}) o
-		// como texto ({"value":"true"}) segun como este configurada la
-		// variable en el panel -- se contemplan los dos casos (comparar
-		// solo contra el string falla en silencio si llega un booleano).
-		JsonVariant v = value["value"];
-		bool encender = v.is<bool>() ? v.as<bool>() : (v.as<String>() == "true");
-		digitalWrite(LED_PIN, encender ? HIGH : LOW);
+		// El interruptor manda el booleano {"value":true} / {"value":false}.
+		// Se lee con .as<bool>(); comparar contra el texto "true" da false
+		// ante un booleano y el LED no prende, sin ningun error a la vista.
+		digitalWrite(LED_PIN, value["value"].as<bool>() ? HIGH : LOW);
 	});
 
 	// El WiFi ya quedo conectado por TecnovaProvisioning::begin() -- este

@@ -5,8 +5,9 @@
 //
 // ¿POR QUÉ ESTO NO SIRVE PARA UN ACTUADOR? MQTT funciona por "empuje": el
 // broker manda el mensaje apenas alguien publica, no hay forma de
-// "pedirlo" después. Si este dispositivo tuviera una variable "output"
-// (algo que reciba comandos con onCommand()), cualquier comando mandado
+// "pedirlo" después. Si este dispositivo tuviera una variable marcada en
+// el panel como "El panel la acciona" -- o sea, algo que reciba comandos
+// con onCommand() -- cualquier comando mandado
 // mientras está dormido se PIERDE -- no queda esperando a que despierte.
 // Por eso este patrón es solo para dispositivos que jamás necesitan
 // recibir nada. Si tu dispositivo es un actuador o mixto, mirá el
