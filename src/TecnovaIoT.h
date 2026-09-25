@@ -18,7 +18,11 @@
 //   void setup() {
 //     Serial.begin(921600);
 //     tecnova.onCommand("estado_led", [](JsonVariant valor) {
-//       digitalWrite(LED_BUILTIN, valor["value"] == "true" ? HIGH : LOW);
+//       // El panel manda el valor ya tipado: el interruptor y el botón,
+//       // un booleano JSON; el deslizador, un número. Se lee con
+//       // .as<bool>() / .as<int>(), NUNCA comparando contra el texto
+//       // "true" -- eso da false ante un booleano y el LED nunca prende.
+//       digitalWrite(LED_BUILTIN, valor["value"].as<bool>() ? HIGH : LOW);
 //     });
 //     tecnova.begin("<ssid_wifi>", "<password_wifi>");
 //   }
@@ -65,8 +69,26 @@
 #include "freertos/semphr.h"
 
 // Se invoca cuando llega desde el panel/app un comando dirigido a una
-// variable con onCommand() registrado. "value" es el JSON completo
-// recibido (típicamente algo con forma {"value": ...}).
+// variable con onCommand() registrado. El parámetro es el JSON completo
+// recibido en "<userId>/<dId>/<variable>/acdata", siempre con la forma
+// {"value": ...} -- el dato en sí se saca con value["value"].
+//
+// QUÉ TIPO LLEGA: lo decide el control que se haya puesto en el panel, y
+// siempre viaja tipado, nunca como texto:
+//   - Interruptor    -> booleano: {"value": true} / {"value": false}
+//   - Botón de pulso -> booleano, SIEMPRE true: {"value": true}
+//                       (no tiene estado; un botón solo no puede apagar)
+//   - Deslizador     -> número:   {"value": 128}
+// No hay ningún otro control en el panel: nada manda un String.
+//
+// Por eso el valor se lee con .as<bool>() o .as<int>()/.as<float>().
+// Comparar contra texto (value["value"] == "true") da false ante un
+// booleano JSON -- son tipos distintos para ArduinoJson -- y el actuador
+// queda apagado sin un solo error a la vista.
+//
+// (Hasta el 24 sep 2026 el botón publicaba el texto libre de un campo
+// "Mensaje a enviar" del panel; ese campo solía quedar vacío y salía al
+// aire {"value":""}. Ya no existe y ningún widget lo lee.)
 typedef std::function<void(JsonVariant value)> TecnovaCommandCallback;
 
 class TecnovaIoT
@@ -83,6 +105,21 @@ public:
 	// Registra qué hacer cuando llega un comando para la variable llamada
 	// "variableName" (el nombre configurado en el panel para esa variable,
 	// no su id interno). Hay que llamarlo ANTES de begin().
+	//
+	// EN EL PANEL conviene que esa variable esté marcada como "El panel la
+	// acciona" (es la pregunta "¿Qué hace esta variable?" del formulario
+	// de Variables). Si quedó como "El equipo la mide" el comando llega
+	// igual -- el panel deja ponerle un control y esta librería no mira el
+	// tipo para despachar el callback -- pero esa variable no va a poder
+	// usarse en Automatizaciones, y la lista de Variables le va a mostrar
+	// una "frecuencia de envío" que en un actuador no significa nada.
+	//
+	// El callback NO corre en loop(): corre en la tarea que atiende el
+	// MQTT. No uses delay() ni lazos largos adentro (ver la nota de
+	// _mutex, más abajo).
+	//
+	// El valor llega tipado según el control -- ver el comentario de
+	// TecnovaCommandCallback, más arriba.
 	void onCommand(const String &variableName, TecnovaCommandCallback callback);
 
 	// Conecta WiFi (si todavía no está conectado), pide las credenciales
@@ -104,8 +141,17 @@ public:
 	// ciclo, respetando el intervalo configurado en el panel para esa
 	// variable. "save" indica si el backend debe guardar este valor en el
 	// historial. Devuelve false si "variableName" no existe entre las
-	// variables que el panel devolvió para este dispositivo (revisar que el
-	// nombre coincida exactamente con el configurado ahí).
+	// variables que el panel devolvió para este dispositivo (la
+	// comparación NO distingue mayúsculas de minúsculas -- ver
+	// _findVariableIndexByName() -- pero el resto del texto sí tiene que
+	// ser idéntico: typos, tildes y espacios de más importan).
+	//
+	// SOLO SIRVE EN VARIABLES DE ENTRADA ("El equipo la mide"). Sobre una
+	// de salida ("El panel la acciona") devuelve true y NO publica nunca
+	// -- esas se reciben con onCommand(), ver _publishDueVariables(). La
+	// librería lo avisa por el monitor serie la primera vez. Si querés que
+	// el equipo informe en qué estado quedó de verdad un actuador, creá en
+	// el panel una segunda variable de entrada y publicá esa.
 	bool setValue(const String &variableName, JsonVariant value, bool save = false);
 	bool setValue(const String &variableName, float value, bool save = false);
 	bool setValue(const String &variableName, int value, bool save = false);
@@ -157,11 +203,25 @@ private:
 	{
 		String id;             // id interno (el que se usa en los topics MQTT)
 		String fullName;       // nombre legible (la clave que usan setValue()/onCommand())
-		String type;           // "input" o "output"
+		// "input"  = el equipo la mide  -> se publica con setValue()
+		// "output" = el panel la acciona -> se recibe con onCommand(), y
+		//            NO se publica nunca (ver _publishDueVariables()).
+		// Son los dos valores que el panel guarda para la pregunta
+		// "¿Qué hace esta variable?" del formulario de Variables.
+		String type;
 		unsigned long sendFreqMs;
 		unsigned long lastSendMs;
 		String lastPayloadJson; // último valor, ya serializado (ej {"value":1,"save":0})
 		unsigned long counter;  // mensajes procesados (recibidos o enviados) para esta variable
+		// Para no repetir el aviso de "setValue() sobre una variable de
+		// salida" en cada vuelta de loop(): se imprime una sola vez por
+		// variable, si no inundaría el monitor serie. Vive acá adentro, y
+		// _fetchCredentials() reconstruye las Variables, así que el aviso
+		// vuelve a salir una vez más si se vuelven a pedir credenciales
+		// (algo que pasa solo tras 30 s sin MQTT). Es lo que se quiere: el
+		// error sigue ahí y conviene recordarlo, pero sin repetirlo 20
+		// veces por segundo.
+		bool warnedOutputSetValue;
 		TecnovaCommandCallback callback;
 	};
 

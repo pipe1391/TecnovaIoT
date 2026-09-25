@@ -7,6 +7,7 @@
 #######################################
 
 TecnovaIoT	KEYWORD1
+TecnovaProvisioning	KEYWORD1
 TecnovaCommandCallback	KEYWORD1
 
 #######################################
@@ -19,3 +20,8 @@ onCommand	KEYWORD2
 setValue	KEYWORD2
 isConnected	KEYWORD2
 printStats	KEYWORD2
+enablePowerSave	KEYWORD2
+deepSleepSeconds	KEYWORD2
+confirmSuccess	KEYWORD2
+checkReconfigureButton	KEYWORD2
+forget	KEYWORD2

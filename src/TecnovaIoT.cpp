@@ -127,6 +127,21 @@ void TecnovaIoT::loop()
 		if (_fetchCredentials())
 		{
 			_startMqtt();
+			// Rearmar el reloj: el cliente nuevo necesita SUS propios 30 s
+			// para conectarse.
+			//
+			// Sin esta línea la marca se quedaba en la hora de la primera
+			// desconexión (solo se pone en cero en MQTT_EVENT_CONNECTED, y
+			// MQTT_EVENT_DISCONNECTED solo la escribe si vale 0), así que
+			// la condición de arriba seguía siendo verdadera en CADA vuelta
+			// de loop(). Con el delay(50) de los ejemplos, eso destruía con
+			// esp_mqtt_client_destroy() un cliente que llevaba 50 ms de
+			// negociación TLS+WSS -- que no termina en 50 ms -- y lanzaba
+			// un POST HTTPS al webhook de credenciales por vuelta. Un corte
+			// de red de más de 30 s en el liceo se convertía en una
+			// tormenta de pedidos contra la API, y el equipo solo se
+			// recuperaba de casualidad.
+			_mqttDisconnectedSinceMs = millis();
 		}
 		else
 		{
@@ -347,6 +362,7 @@ bool TecnovaIoT::_fetchCredentials()
 		}
 		variable.lastSendMs = 0;
 		variable.counter = 0;
+		variable.warnedOutputSetValue = false;
 		_variables.push_back(variable);
 	}
 
@@ -425,7 +441,20 @@ void TecnovaIoT::_publishDueVariables()
 	{
 		if (variable.type == "output")
 		{
-			continue; // las "output" (actuadores) se reciben, no se publican
+			// Las "output" (las que en el panel están marcadas como "El
+			// panel la acciona") se RECIBEN con onCommand(); no se
+			// publican nunca. El panel tampoco las lee de acá: el widget
+			// del interruptor refleja el comando que él mismo mandó, no
+			// un reporte del equipo.
+			//
+			// OJO: si llamás a setValue() sobre una variable de salida, te
+			// va a devolver true (el nombre existe) pero no se publica ni
+			// se guarda nada -- _setValueByName() lo descarta a propósito
+			// y avisa una vez por el monitor serie. Si querés que el
+			// equipo informe en qué estado quedó de verdad un actuador,
+			// creá en el panel una segunda variable de entrada (por
+			// ejemplo "led_confirmado") y publicá esa.
+			continue;
 		}
 		if (variable.lastPayloadJson.length() == 0)
 		{
@@ -447,13 +476,49 @@ void TecnovaIoT::_publishDueVariables()
 
 bool TecnovaIoT::_setValueByName(const String &variableName, const String &payloadJson)
 {
+	// Se decide adentro del mutex pero se imprime afuera: escribir por
+	// serie es lento y no hay por qué tener bloqueado _variables mientras
+	// tanto (el callback de MQTT corre en otra tarea y también lo pide).
+	bool avisarSalida = false;
+
 	xSemaphoreTake(_mutex, portMAX_DELAY);
 	int idx = _findVariableIndexByName(variableName);
 	if (idx >= 0)
 	{
-		_variables[idx].lastPayloadJson = payloadJson;
+		if (_variables[idx].type == "output")
+		{
+			// Una variable de salida NO se publica nunca (ver
+			// _publishDueVariables). Sin este aviso, setValue() devolvía
+			// true y no pasaba nada: el clásico fallo que no da ningún
+			// error y cuesta una tarde encontrar.
+			//
+			// Y sobre todo: NO se pisa lastPayloadJson. Ahí vive el último
+			// comando que mandó el panel (lo escribe
+			// _handleIncomingMessage) y es lo que printStats() muestra en
+			// la columna "Last V". Si guardáramos acá el valor que el
+			// usuario intentó publicar, borraríamos la única evidencia de
+			// qué llegó -- justo cuando está depurando por qué su actuador
+			// no hace lo que espera.
+			if (!_variables[idx].warnedOutputSetValue)
+			{
+				_variables[idx].warnedOutputSetValue = true;
+				avisarSalida = true;
+			}
+		}
+		else
+		{
+			_variables[idx].lastPayloadJson = payloadJson;
+		}
 	}
 	xSemaphoreGive(_mutex);
+
+	if (avisarSalida)
+	{
+		Serial.printf(
+			"[TecnovaIoT] Aviso: setValue(\"%s\") no publica nada. En el panel esa variable esta marcada como \"El panel la acciona\" (salida): se recibe con onCommand(), no se envia. Si queres que el equipo informe su estado, crea una variable de entrada aparte.\n",
+			variableName.c_str());
+	}
+
 	return idx >= 0;
 }
 

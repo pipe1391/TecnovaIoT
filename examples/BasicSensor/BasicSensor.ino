@@ -5,6 +5,16 @@
 // Los nombres "temperatura" y "led" de abajo son solo ejemplo -- tienen que
 // coincidir EXACTO con los nombres de variable que configuraste para este
 // dispositivo en el panel.
+//
+// EN EL PANEL, al crear cada variable hay que contestar la pregunta "Que
+// hace esta variable?":
+//   - "temperatura" -> "El equipo la mide"   (se publica con setValue)
+//   - "led"         -> "El panel la acciona" (se recibe con onCommand)
+// Si "led" queda como "El equipo la mide" el comando igual va a llegar --
+// el panel te deja ponerle el interruptor lo mismo -- pero esa variable no
+// va a poder usarse en Automatizaciones, y la lista de Variables te va a
+// mostrar una "frecuencia de envio" que en un actuador no significa nada.
+// Marcala bien.
 
 #include <TecnovaIoT.h>
 
@@ -25,16 +35,23 @@ void setup()
 
 	// Se registra ANTES de begin(): cuando llegue un comando para la
 	// variable "led" (el nombre configurado en el panel), se llama a este
-	// callback con el JSON recibido -- puede llegar como booleano nativo
-	// ({"value":true}) o como texto ({"value":"true"}) segun como este
-	// configurada la variable en el panel. Comparar solo contra el string
-	// "true" falla en silencio si llega un booleano real (son tipos
-	// distintos para ArduinoJson, nunca son "iguales" aunque representen
-	// lo mismo) -- por eso se contemplan los dos casos.
+	// callback con el JSON recibido, que siempre tiene la forma
+	// {"value": ...}.
+	//
+	// El panel manda el valor TIPADO, nunca como texto: para un LED se le
+	// pone un INTERRUPTOR, que publica el booleano {"value":true} o
+	// {"value":false}. Por eso se lee con .as<bool>().
+	//
+	// NO compares contra el texto "true" (value["value"] == "true"): para
+	// ArduinoJson un booleano y ese texto son tipos distintos y nunca son
+	// "iguales", asi que la comparacion da false siempre y el LED no
+	// prende -- sin ningun error a la vista.
+	//
+	// Si en vez de un interruptor le pones un BOTON DE PULSO, vas a recibir
+	// siempre {"value":true} y nunca vas a poder apagar: un boton no tiene
+	// estado. Para encender y apagar, interruptor.
 	tecnova.onCommand("led", [](JsonVariant value) {
-		JsonVariant v = value["value"];
-		bool encender = v.is<bool>() ? v.as<bool>() : (v.as<String>() == "true");
-		digitalWrite(LED_PIN, encender ? HIGH : LOW);
+		digitalWrite(LED_PIN, value["value"].as<bool>() ? HIGH : LOW);
 	});
 
 	// Conecta WiFi, pide credenciales al panel, y abre la conexión MQTT.
