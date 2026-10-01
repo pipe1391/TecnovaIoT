@@ -18,7 +18,9 @@
 #if TECNOVA_HAS_WIFIMANAGER
 
 #include <Preferences.h>
+#include <WiFi.h>
 #include <WiFiManager.h>
+#include <esp_wifi.h>
 
 // ============================================================================
 // QUE ES UN "PORTAL CAUTIVO" Y POR QUE LO USAMOS
@@ -60,8 +62,11 @@
 //   - "device_id"    -> el dId del dispositivo en el panel Tecnova
 //   - "device_pass"  -> el password de ese dispositivo
 //   - "force_portal" -> una bandera temporal que usamos para "pedir" que se
-//     vuelva a abrir el portal la proxima vez que arranque (ver
-//     checkReconfigureButton())
+//     vuelva a abrir el portal la proxima vez que arranque (la dejan
+//     checkReconfigureButton() y requestReconfigure())
+//   - "boot_fails"   -> cuantos arranques seguidos no llegaron a
+//     confirmSuccess() (ver RECUPERACION AUTOMATICA en el .h; con
+//     setAutoRestart(false) no se usa)
 
 namespace
 {
@@ -124,6 +129,12 @@ a:hover{color:var(--accent-dark) !important;}
 
 	unsigned long _buttonPressStart = 0;
 
+	// Opciones (ver setAutoRestart(), setPortalTimeout() y onPortalOpen() en
+	// el .h). Los valores iniciales son el comportamiento de siempre.
+	bool _autoRestart = true;
+	unsigned long _portalTimeoutSeconds = 300;
+	TecnovaPortalCallback _portalCallback = nullptr;
+
 	String _loadPref(const char *key)
 	{
 		_prefs.begin("tecnova", true); // true = abrir solo para lectura
@@ -148,7 +159,98 @@ a:hover{color:var(--accent-dark) !important;}
 	void _onPortalSave()
 	{
 		_savePref("device_id", String(_paramDeviceId->getValue()));
-		_savePref("device_pass", String(_paramDevicePass->getValue()));
+		String devicePass = String(_paramDevicePass->getValue());
+		// Sin reinicio el formulario NO trae precargado el password guardado
+		// (ver begin()): si la persona deja el campo vacio, es que no lo
+		// quiere cambiar, y se conserva el que habia.
+		if (_autoRestart || devicePass.length() > 0)
+		{
+			_savePref("device_pass", devicePass);
+		}
+	}
+
+	// Guarda el pedido de portal y reinicia. La usan checkReconfigureButton() y requestReconfigure().
+	void _restartIntoPortal()
+	{
+		_savePref("force_portal", "1");
+		delay(300);
+		ESP.restart();
+	}
+
+	// Lee la red WiFi que tiene guardada el ESP32. Necesita el WiFi encendido
+	// (WiFi.mode) y NO depende de estar conectado (WiFi.SSID() si depende).
+	// Copia con terminador: un SSID de 32 caracteres o una clave de 64 no
+	// traen '\0' en la estructura de ESP-IDF.
+	void _readSavedWifi(String &ssid, String &password)
+	{
+		wifi_config_t conf;
+		memset(&conf, 0, sizeof(conf));
+		if (esp_wifi_get_config(WIFI_IF_STA, &conf) != ESP_OK)
+		{
+			ssid = "";
+			password = "";
+			return;
+		}
+		char s[33];
+		memcpy(s, conf.sta.ssid, 32);
+		s[32] = '\0';
+		char p[65];
+		memcpy(p, conf.sta.password, 64);
+		p[64] = '\0';
+		ssid = s;
+		password = p;
+	}
+
+	// Modo sin reinicio (ver setAutoRestart()). Usa el WiFiManager ya
+	// configurado por begin() (titulo, estilo y campos del dispositivo).
+	void _beginWithoutRestart(WiFiManager &wm, const char *apName, bool forcePortal,
+							  String &outWifiSsid, String &outWifiPassword,
+							  String &outDeviceId, String &outDevicePassword)
+	{
+		WiFi.mode(WIFI_STA); // para poder leer la red guardada; NO conecta (eso lo hace TecnovaIoT)
+		while (true)
+		{
+			outDeviceId = _loadPref("device_id");
+			outDevicePassword = _loadPref("device_pass");
+			_readSavedWifi(outWifiSsid, outWifiPassword);
+			bool complete = outDeviceId.length() > 0 && outDevicePassword.length() > 0 && outWifiSsid.length() > 0;
+			if (complete && !forcePortal)
+			{
+				Serial.println("[TecnovaProvisioning] Configuracion guardada -- el WiFi conecta en segundo plano.");
+				return;
+			}
+
+			// Sin datos completos no hay con que seguir: ese portal no vence.
+			wm.setConfigPortalTimeout(complete ? _portalTimeoutSeconds : 0);
+			Serial.println("[TecnovaProvisioning] Abriendo portal de configuracion...");
+
+			// El portal de WiFiManager es un lazo que solo cede la CPU con
+			// yield(), y yield() nunca le deja el nucleo a una tarea de MENOR
+			// prioridad. En este modo begin() suele correr en una tarea propia
+			// en el nucleo 0 (la receta para equipos con pantalla), donde el
+			// vigilante (watchdog) exige que la tarea IDLE corra al menos una
+			// vez cada 5 s. Cuando un celular abre una conexion y no manda nada
+			// (Chrome lo hace para "adelantarse"), el servidor web gira hasta
+			// 5 s esperandola sin dormir nunca: IDLE no corre y el vigilante
+			// reinicia el ESP32 justo mientras alguien configura. Con la misma
+			// prioridad que IDLE, cada yield() la deja correr. Con el
+			// comportamiento de siempre el portal corre en setup() (nucleo 1,
+			// sin ese vigilante) y no hace falta.
+			UBaseType_t priority = uxTaskPriorityGet(NULL);
+			vTaskPrioritySet(NULL, tskIDLE_PRIORITY);
+			bool ok = wm.startConfigPortal(apName);
+			vTaskPrioritySet(NULL, priority);
+			forcePortal = false; // el pedido ya se atendio
+			if (!ok)
+			{
+				Serial.println("[TecnovaProvisioning] El portal se cerro sin completar la configuracion.");
+				if (!complete)
+				{
+					delay(1000); // "Exit" o fallo al crear la red: se vuelve a abrir
+				}
+			}
+			// La vuelta siguiente decide con lo que quedo guardado.
+		}
 	}
 }
 
@@ -167,16 +269,22 @@ void begin(String &outWifiSsid, String &outWifiPassword, String &outDeviceId, St
 	// rechaza) y loop() -- donde se revisa el boton -- nunca se llega a
 	// ejecutar. En vez de quedar reiniciando en loop para siempre, se
 	// fuerza el portal solo, sin que haga falta tocar nada.
-	int bootFailures = _loadPref("boot_fails").toInt() + 1;
-	bool tooManyFailures = (bootFailures >= MAX_BOOT_FAILURES);
-	if (tooManyFailures)
+	// Sin reinicios (setAutoRestart(false)) ese bucle no puede pasar, asi
+	// que no se cuenta nada.
+	bool tooManyFailures = false;
+	if (_autoRestart)
 	{
-		Serial.printf("[TecnovaProvisioning] %d arranques seguidos sin exito -- reabriendo el portal automaticamente.\n", bootFailures);
-		_savePref("boot_fails", "0");
-	}
-	else
-	{
-		_savePref("boot_fails", String(bootFailures));
+		int bootFailures = _loadPref("boot_fails").toInt() + 1;
+		tooManyFailures = (bootFailures >= MAX_BOOT_FAILURES);
+		if (tooManyFailures)
+		{
+			Serial.printf("[TecnovaProvisioning] %d arranques seguidos sin exito -- reabriendo el portal automaticamente.\n", bootFailures);
+			_savePref("boot_fails", "0");
+		}
+		else
+		{
+			_savePref("boot_fails", String(bootFailures));
+		}
 	}
 
 	// Paso 1: ver que tenemos guardado de arranques anteriores.
@@ -184,7 +292,8 @@ void begin(String &outWifiSsid, String &outWifiPassword, String &outDeviceId, St
 	outDevicePassword = _loadPref("device_pass");
 
 	// "force_portal" es una bandera que deja prendida
-	// checkReconfigureButton() cuando alguien pide reconfigurar a mano. La
+	// checkReconfigureButton() (o requestReconfigure()) cuando alguien pide
+	// reconfigurar a mano. La
 	// leemos UNA vez y la borramos enseguida ("se consume"), para que en el
 	// SIGUIENTE reinicio (una vez resuelto el portal) no se vuelva a abrir
 	// solo sin que nadie lo pida.
@@ -203,16 +312,40 @@ void begin(String &outWifiSsid, String &outWifiPassword, String &outDeviceId, St
 	WiFiManager wm;
 	wm.setTitle("Configuracion del dispositivo");
 	wm.setCustomHeadElement(PORTAL_CSS);
-	wm.setConfigPortalTimeout(300); // si nadie completa el formulario en 5 min, sigue reintentando con lo que ya tenia
+	wm.setConfigPortalTimeout(_portalTimeoutSeconds); // por defecto 300: si nadie completa el formulario en 5 min, sigue reintentando con lo que ya tenia
 
 	WiFiManagerParameter sectionDivider(SECTION_DIVIDER);
 	_paramDeviceId = new WiFiManagerParameter("device_id", "ID del dispositivo (dId)", outDeviceId.c_str(), 40);
-	_paramDevicePass = new WiFiManagerParameter("device_pass", "Password del dispositivo", outDevicePassword.c_str(), 40);
+	if (_autoRestart)
+	{
+		_paramDevicePass = new WiFiManagerParameter("device_pass", "Password del dispositivo", outDevicePassword.c_str(), 40);
+	}
+	else
+	{
+		// Sin reinicio (equipos con pantalla) el portal se abre con un par de
+		// toques, y su red es abierta: si el formulario trajera el password
+		// guardado, cualquiera conectado podria leerlo. Va vacio, y vacio
+		// quiere decir "no cambia" (ver _onPortalSave()).
+		bool hasSaved = outDevicePassword.length() > 0;
+		_paramDevicePass = new WiFiManagerParameter("device_pass",
+													hasSaved ? "Password del dispositivo (vacio = no cambia)" : "Password del dispositivo",
+													"", 40);
+	}
 
 	wm.addParameter(&sectionDivider);
 	wm.addParameter(_paramDeviceId);
 	wm.addParameter(_paramDevicePass);
 	wm.setSaveParamsCallback(_onPortalSave);
+	if (_portalCallback)
+	{
+		// WiFiManager avisa recien levantada la red del portal: se le pasa el nombre (por ejemplo, para un QR).
+		wm.setAPCallback([apName](WiFiManager *) { _portalCallback(apName); });
+	}
+	if (!_autoRestart)
+	{
+		_beginWithoutRestart(wm, apName, forcePortal, outWifiSsid, outWifiPassword, outDeviceId, outDevicePassword);
+		return;
+	}
 
 	// Paso 3: la decision central de esta funcion.
 	//   - Si falta algun dato, o alguien pidio reconfigurar -> abrimos el
@@ -305,9 +438,7 @@ void checkReconfigureButton(uint8_t configButtonPin, unsigned long holdMs)
 		// Revisandolo aca, con el chip ya arrancado hace rato, evitamos
 		// ese problema por completo.
 		Serial.println("[TecnovaProvisioning] Boton mantenido -- reiniciando para abrir el portal de configuracion...");
-		_savePref("force_portal", "1");
-		delay(300);
-		ESP.restart();
+		_restartIntoPortal();
 	}
 }
 
@@ -324,6 +455,30 @@ void confirmSuccess()
 	_savePref("boot_fails", "0");
 }
 
+void setAutoRestart(bool enabled)
+{
+	_autoRestart = enabled;
+}
+
+void setPortalTimeout(unsigned long seconds)
+{
+	_portalTimeoutSeconds = seconds;
+}
+
+void onPortalOpen(TecnovaPortalCallback callback)
+{
+	_portalCallback = callback;
+}
+
+void requestReconfigure()
+{
+	// Mismo camino que el boton: el portal se abre en el PROXIMO arranque,
+	// asi nunca convive con la conexion MQTT ni con un pedido HTTPS que ya
+	// esten andando.
+	Serial.println("[TecnovaProvisioning] Reconfiguracion pedida -- reiniciando para abrir el portal de configuracion...");
+	_restartIntoPortal();
+}
+
 } // namespace TecnovaProvisioning
 
 #else // !TECNOVA_HAS_WIFIMANAGER
@@ -333,6 +488,13 @@ void confirmSuccess()
 // dejamos una implementación "stub": compila bien, pero si el sketch
 // realmente llama a alguna de estas funciones, avisa por Serial qué hay
 // que instalar en vez de fallar en silencio.
+namespace
+{
+	// Guarda setAutoRestart() tambien aca: sin reinicio, begin() no puede
+	// reiniciar ni siquiera para avisar este error.
+	bool _stubAutoRestart = true;
+}
+
 namespace TecnovaProvisioning
 {
 
@@ -346,6 +508,10 @@ void begin(String &outWifiSsid, String &outWifiPassword, String &outDeviceId, St
 	(void)apName;
 	(void)configButtonPin;
 	Serial.println("[TecnovaProvisioning] ERROR: falta agregar tzapu/WiFiManager a tus lib_deps (ver README de TecnovaIoT, seccion \"Portal cautivo\").");
+	if (!_stubAutoRestart)
+	{
+		return; // sin reinicio: vuelve con los datos vacios, sin bloquear
+	}
 	delay(5000);
 	ESP.restart();
 }
@@ -362,6 +528,26 @@ void forget()
 
 void confirmSuccess()
 {
+}
+
+void setAutoRestart(bool enabled)
+{
+	_stubAutoRestart = enabled;
+}
+
+void setPortalTimeout(unsigned long seconds)
+{
+	(void)seconds;
+}
+
+void onPortalOpen(TecnovaPortalCallback callback)
+{
+	(void)callback;
+}
+
+void requestReconfigure()
+{
+	Serial.println("[TecnovaProvisioning] ERROR: falta agregar tzapu/WiFiManager a tus lib_deps (ver README de TecnovaIoT, seccion \"Portal cautivo\").");
 }
 
 } // namespace TecnovaProvisioning

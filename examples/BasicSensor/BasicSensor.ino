@@ -63,8 +63,10 @@ unsigned long lastRead = 0;
 
 void loop()
 {
-	// Hay que llamarlo siempre: publica lo que corresponda y reconecta
-	// automáticamente si se corta el WiFi o el MQTT.
+	// Hay que llamarlo siempre: publica lo que corresponda y vigila la
+	// conexión. Si se corta el MQTT se reconecta solo; si se corta el WiFi,
+	// espera 15 s y reinicia el ESP32 para empezar de cero (para no
+	// reiniciar nunca, ver examples/NetworkTask).
 	tecnova.loop();
 
 	// Simula una lectura de sensor cada 2s. setValue() no publica al

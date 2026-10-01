@@ -21,6 +21,7 @@ un portal cautivo. Si ya conocés estos conceptos, andá directo a
 - [API](#api)
 - [Consumo de energía](#consumo-de-energía)
 - [Portal cautivo (TecnovaProvisioning)](#portal-cautivo-tecnovaprovisioning)
+- [Dispositivos con pantalla (o un loop() que no puede esperar)](#dispositivos-con-pantalla-o-un-loop-que-no-puede-esperar)
 - [Sobre el certificado TLS](#sobre-el-certificado-tls)
 - [Compatibilidad de versiones del core ESP32](#compatibilidad-de-versiones-del-core-esp32)
 - [Errores comunes y cómo entenderlos](#errores-comunes-y-cómo-entenderlos)
@@ -38,7 +39,11 @@ particular**, y que son fáciles de hacer mal:
 2. Autenticar el dispositivo contra un servidor y obtener credenciales.
 3. Conectar por MQTT usando TLS (la versión "segura" de MQTT), validando
    el certificado del servidor correctamente.
-4. Reconectar solo si se corta la red o el broker, sin perder el estado.
+4. Recuperarse solo si se corta la red o el broker. El MQTT se reconecta
+   solo; ante un corte de WiFi, con la configuración por defecto, la
+   librería reinicia el ESP32 para empezar de cero (con
+   `setAutoRestart(false)` reintenta sin reiniciar: ver
+   [Dispositivos con pantalla](#dispositivos-con-pantalla-o-un-loop-que-no-puede-esperar)).
 5. Traducir el "protocolo" propio de la plataforma (topics, formato de
    los mensajes) a algo simple para tu código: "leí un sensor, lo publico"
    / "llegó un comando, reacciono".
@@ -123,7 +128,7 @@ void setup() {
 }
 
 void loop() {
-  tecnova.loop(); // publica lo que corresponda y reconecta solo
+  tecnova.loop(); // publica lo que corresponda y vigila la conexión
 
   tecnova.setValue("temperatura", 23.5); // se publica respetando la
                                           // frecuencia configurada en el panel
@@ -240,6 +245,7 @@ exactamente uno de estos.
 | [`RGBLed`](examples/RGBLed/RGBLed.ino) | **Actuador**: tres variables de salida (`rojo`, `verde`, `azul`), cada una con un **Deslizador** de 0 a 255 en el panel, mezcladas por PWM. Muestra también el caso de varias salidas en un mismo dispositivo. | Ninguna (solo `analogWrite`). |
 | [`GPSTracker`](examples/GPSTracker/GPSTracker.ino) | Latitud/longitud leyendo un módulo GPS NEO-6M/NEO-M8N por UART. | `mikalhart/TinyGPSPlus` |
 | [`DeepSleepSensor`](examples/DeepSleepSensor/DeepSleepSensor.ino) | Dispositivo a batería que se despierta, publica, y vuelve a dormir -- ver [Consumo de energía](#consumo-de-energía). | Ninguna. |
+| [`NetworkTask`](examples/NetworkTask/NetworkTask.ino) | La librería en su propia tarea de FreeRTOS, **sin reinicios**, con `getState()` y `sendNow()`: la base para un equipo con pantalla -- ver [Dispositivos con pantalla](#dispositivos-con-pantalla-o-un-loop-que-no-puede-esperar). | Ninguna. |
 
 Cada ejemplo trae en su propio encabezado el detalle de conexión física
 (qué pin va a qué pata del sensor) y, si hace falta, la línea exacta para
@@ -251,13 +257,17 @@ agregar a tu `platformio.ini`.
 |---|---|
 | `TecnovaIoT(dId, password, jsonCapacity=4096)` | Constructor. `jsonCapacity` son los bytes reservados temporalmente para parsear la respuesta del webhook -- solo hace falta subirlo si tenés muchísimas variables. |
 | `onCommand(nombreVariable, callback)` | Registra qué hacer cuando llega un comando para esa variable. Llamar antes de `begin()`. La variable tiene que estar marcada en el panel como **"El panel la acciona"**. El callback recibe el JSON completo (`{"value": ...}`) y el valor llega tipado según el control: booleano para interruptor y botón, número para deslizador. **No devuelve nada**: si el nombre no coincide con ninguna variable, el callback simplemente no se dispara nunca. **Corre en la tarea del MQTT, no en `loop()`** -- nada de `delay()` adentro. |
-| `begin(ssid, password)` | Conecta WiFi, pide credenciales, conecta MQTT. Bloqueante; reinicia el ESP32 solo si algo falla. Si el WiFi ya está conectado (por ejemplo, porque lo conectó `TecnovaProvisioning` antes), no vuelve a intentarlo. |
-| `loop()` | Llamar en cada vuelta de `loop()`. Publica variables vencidas y reconecta si hace falta. |
+| `begin(ssid, password)` | Conecta WiFi, pide credenciales, conecta MQTT. Bloqueante; reinicia el ESP32 solo si algo falla. Si el WiFi ya está conectado (por ejemplo, porque lo conectó `TecnovaProvisioning` antes), no vuelve a intentarlo. Con `setAutoRestart(false)` no espera nada: vuelve enseguida y la conexión la hace `loop()`. |
+| `loop()` | Llamar en cada vuelta de `loop()`. Publica variables vencidas. Si se corta el MQTT, se reconecta solo (a los 30 s sin volver pide credenciales de nuevo). **Si se corta el WiFi no lo reconecta: espera 15 s y reinicia el ESP32.** Con `setAutoRestart(false)` no reinicia nunca: reintenta de a pasos (ver [Dispositivos con pantalla](#dispositivos-con-pantalla-o-un-loop-que-no-puede-esperar)). |
 | `setValue(nombreVariable, valor, save=false)` | Actualiza el valor de una variable (`float`, `int`, `bool`, `String` o `JsonVariant`). Se publica sola en el próximo ciclo, respetando la frecuencia configurada en el panel para esa variable. `save` indica si el backend debe guardar este valor en el historial. **Solo sirve en variables de entrada** ("El equipo la mide"): sobre una de salida devuelve `true` pero no publica nunca -- la librería avisa por el monitor serie la primera vez. |
 | `isConnected()` | `true` si el MQTT está conectado ahora mismo. |
 | `printStats(out=Serial)` | Debug: tabla con el estado de cada variable. Throttle interno, no imprime más seguido que cada 2s aunque la llames en cada `loop()`. |
 | `enablePowerSave()` | Activa el modem-sleep de WiFi -- ahorra energía sin perder la sesión MQTT ni dejar de recibir comandos. Ver [Consumo de energía](#consumo-de-energía). |
 | `deepSleepSeconds(segundos)` | Apaga el ESP32 en deep sleep durante ese tiempo. **Solo para dispositivos que nunca reciben comandos.** No retorna -- ver [Consumo de energía](#consumo-de-energía). |
+| `setAutoRestart(activado)` | `true` (por defecto): el comportamiento de siempre, que reinicia el ESP32 ante un corte. `false`: nunca reinicia ni espera; `loop()` reintenta de a pasos. Llamar **antes** de `begin()`. Pensado para equipos con pantalla -- ver [Dispositivos con pantalla](#dispositivos-con-pantalla-o-un-loop-que-no-puede-esperar). |
+| `getState()` | En qué paso está la conexión (un `TecnovaState`: `TECNOVA_WIFI_CONNECTING`, `TECNOVA_CONNECTED`, etc.). Se puede llamar desde cualquier tarea y en los dos modos: no toma candados ni espera a la red. |
+| `stateName(estado)` | El estado en texto, sin tildes (`"conectando WiFi"`, `"conectado"`...), para el monitor serie o una pantalla. Es `static`: `TecnovaIoT::stateName(...)`. |
+| `sendNow(nombreVariable)` | Publica ya el último valor de `setValue()`, sin esperar la frecuencia del panel: para un control que alguien acaba de tocar. No publica adentro de la llamada (lo hace `loop()`), así que se puede llamar desde cualquier tarea. Como mucho un envío cada 250 ms por variable; el **último** valor siempre sale, y si la conexión se cae (aunque sea justo en el envío) sale apenas vuelva. Eso vale entero con `setAutoRestart(false)`: en el modo por defecto, un corte de WiFi reinicia el ESP32 y 30 s sin MQTT rearman la lista de variables, y en los dos casos el pedido se pierde (hay que volver a llamar a `setValue()`). Devuelve `false` si la variable no existe o es de salida. |
 
 ## Consumo de energía
 
@@ -398,9 +408,13 @@ Ver el ejemplo completo en
    `TecnovaIoT-Setup`. Te conectás desde el celular y aparece un
    formulario: la red WiFi de destino (con su password) + el `dId` y
    password del dispositivo.
-2. Al guardar, el ESP32 intenta conectarse con esos datos. Si funciona,
-   los guarda en NVS (ver [Conceptos básicos](#conceptos-básicos-para-quien-recién-empieza))
-   y sigue el arranque normal.
+2. Al tocar **Guardar**, los datos quedan guardados en NVS (ver
+   [Conceptos básicos](#conceptos-básicos-para-quien-recién-empieza)) en
+   ese mismo momento -- **antes** de probar si sirven -- y el ESP32 intenta
+   conectarse con esa red. Si conecta, sigue el arranque normal; si no, el
+   portal sigue abierto para corregirlos. (Por eso, si cargás un
+   `dId`/password equivocado, el equipo lo va a seguir usando hasta que lo
+   corrijas: ver la recuperación automática, más abajo.)
 3. **Próximos encendidos**: como ya está todo guardado, se conecta solo,
    sin mostrar nada.
 4. **Si necesitás cambiar la configuración** más adelante (otra red WiFi,
@@ -421,10 +435,11 @@ forma de recuperarlo salvo reprogramarlo por USB.
 
 Por eso `TecnovaProvisioning::begin()` lleva la cuenta (persistida en NVS)
 de cuántos arranques seguidos NO terminaron en un
-`TecnovaProvisioning::confirmSuccess()`. Al tercer arranque fallido
-seguido, **reabre el portal por su cuenta**, sin que haga falta tocar
-ningún botón -- solo hay que conectarse de nuevo a `TecnovaIoT-Setup` y
-cargar los datos correctos esta vez.
+`TecnovaProvisioning::confirmSuccess()`. Al tercer arranque seguido sin
+`confirmSuccess()` -- o sea, después de **dos** arranques fallidos --
+**reabre el portal por su cuenta**, sin que haga falta tocar ningún
+botón: solo hay que conectarse de nuevo a `TecnovaIoT-Setup` y cargar los
+datos correctos esta vez.
 
 Por esto es importante llamar a `confirmSuccess()` -- si tu sketch no lo
 llama nunca, `begin()` va a pensar que TODOS los arranques fallan, y va a
@@ -449,28 +464,294 @@ revisa **en `loop()`, con el chip ya arrancado hace rato** (no en
 GPIO0 ya volvió a ser un pin de entrada común, sin ningún significado
 especial para el hardware.
 
+### Seguridad del portal
+
+Mientras el portal está abierto, su red WiFi es **abierta** (sin
+contraseña): cualquiera que esté cerca se puede conectar. Y una vez
+conectado:
+
+- Con la configuración por defecto, el formulario trae **precargado el
+  password del dispositivo** que está guardado, y se puede leer. Con
+  `setAutoRestart(false)` el campo viene vacío (vacío = no cambia).
+- WiFiManager deja habilitadas, sin ninguna clave, sus páginas para
+  **subir otro firmware** (`/update`) y para **borrar la configuración**
+  (`/erase`). Un firmware ajeno podría leer lo que está guardado en el
+  equipo, incluida la clave del WiFi.
+
+Por eso: abrí el portal solo cuando lo vas a usar, cerralo (completándolo)
+enseguida, y si el `dId` y el password del dispositivo quedaron a la vista
+de alguien que no debía, cambiá el password del dispositivo en el panel.
+
 ### Referencia rápida del módulo
 
 | Función | Qué hace |
 |---|---|
-| `TecnovaProvisioning::begin(wifiSsid, wifiPassword, deviceId, devicePassword, apName="TecnovaIoT-Setup", configButtonPin=0)` | Junta las 4 credenciales (de NVS o del portal) y deja el WiFi conectado. Bloqueante. Reabre el portal solo si los últimos 3 arranques fallaron. |
-| `TecnovaProvisioning::confirmSuccess()` | Llamar justo después de que `tecnova->begin()` retorne. Resetea el contador de arranques fallidos que usa la recuperación automática. |
+| `TecnovaProvisioning::begin(wifiSsid, wifiPassword, deviceId, devicePassword, apName="TecnovaIoT-Setup", configButtonPin=0)` | Junta las 4 credenciales (de NVS o del portal) y deja el WiFi conectado. Bloqueante. Reabre el portal solo si los 2 arranques anteriores fallaron. Con `setAutoRestart(false)` no conecta el WiFi ni reinicia: devuelve lo guardado enseguida y abre el portal solo si faltan datos o se pidió reconfigurar. |
+| `TecnovaProvisioning::confirmSuccess()` | Llamar justo después de que `tecnova->begin()` retorne. Resetea el contador de arranques fallidos que usa la recuperación automática. (Con `setAutoRestart(false)` no hace falta.) |
 | `TecnovaProvisioning::checkReconfigureButton(configButtonPin=0, holdMs=3000)` | Llamar en cada `loop()`. Reabre el portal si se mantiene el botón apretado. |
 | `TecnovaProvisioning::forget()` | Borra el `dId`/password guardados (no toca el WiFi), para forzar reconfiguración completa. |
+| `TecnovaProvisioning::setAutoRestart(activado)` | Antes de `begin()`. `false`: modo para equipos con pantalla -- no cuenta arranques, no reinicia nunca y no conecta el WiFi (lo hace `TecnovaIoT`, también con `setAutoRestart(false)`). Un WiFi caído al arrancar **no** abre el portal. El formulario no trae precargado el password del dispositivo (vacío = no cambia). |
+| `TecnovaProvisioning::setPortalTimeout(segundos)` | Antes de `begin()`. Cuánto espera el portal sin que nadie lo use. Por defecto 300; `0` = sin límite. |
+| `TecnovaProvisioning::onPortalOpen(funcion)` | Antes de `begin()`. Función que se llama al abrirse el portal, con el nombre de la red que crea el equipo (por ejemplo, para mostrar un QR). Corre adentro del portal: solo anotar o encolar. |
+| `TecnovaProvisioning::requestReconfigure()` | Pide abrir el portal desde el código (un botón en una pantalla táctil): guarda el pedido y reinicia. Es lo mismo que mantener el botón BOOT. |
+
+## Dispositivos con pantalla (o un loop() que no puede esperar)
+
+### Por qué hace falta otro modo
+
+Con la configuración por defecto, la librería está pensada para un sensor
+suelto: `begin()` espera al WiFi y al panel, y ante un problema (un corte
+de WiFi, un panel que no contesta) **reinicia el ESP32** para empezar de
+cero. Cuando nadie está mirando el equipo, es lo más simple y robusto.
+
+En un equipo con pantalla, en cambio, `loop()` tiene que correr todo el
+tiempo (dibujar, leer el táctil): mientras la librería espera, la pantalla
+queda congelada, y un reinicio se ve como un apagón. Para esos casos está
+`setAutoRestart(false)`:
+
+- `begin()` no espera nada: guarda una copia de los datos y vuelve.
+- `loop()` hace la conexión de a pasos (ver `getState()`) y reintenta solo
+  lo que falle -- WiFi, credenciales, MQTT --, cada vez más espaciado y
+  **sin reiniciar nunca**.
+- Lo único que puede tardar es el pedido HTTPS de credenciales (1 a 3 s lo
+  normal). Por eso la librería va en una **tarea propia** de FreeRTOS, y
+  no en el `loop()` que dibuja.
+
+Con la configuración por defecto nada de esto cambia: todo lo nuevo hay
+que pedirlo.
+
+### La receta
+
+1. `setAutoRestart(false)` en las **dos** clases (`TecnovaIoT` y
+   `TecnovaProvisioning`), antes de sus `begin()`.
+2. `TecnovaProvisioning::begin()`, `tecnova->begin()` y `tecnova->loop()`
+   van en una tarea propia, en el núcleo 0 (el del WiFi) y con 12 KB de
+   pila: `xTaskCreatePinnedToCore(tareaRed, "red", 12288, NULL, 1, NULL, 0)`.
+3. Esa tarea cede el núcleo en cada vuelta con
+   `vTaskDelay(pdMS_TO_TICKS(20))`: el vigilante (*watchdog*) del núcleo 0
+   está activo, y sin esa pausa también se traba el WiFi. Mientras el
+   portal está abierto no hace falta hacer nada: el lazo de WiFiManager no
+   cede el núcleo por su cuenta, así que `TecnovaProvisioning::begin()` baja
+   la tarea a la prioridad mínima (la de la tarea IDLE, que es la que el
+   vigilante espera ver correr) y al cerrar el portal la devuelve a la suya.
+
+```cpp
+#include <TecnovaIoT.h>
+#include <TecnovaProvisioning.h>
+
+// Colas de un solo lugar ("buzones"): cada dato nuevo pisa al anterior, así
+// nunca se llenan, siempre queda el último valor y quien escribe no espera.
+QueueHandle_t buzonNivel;                   // pantalla -> red: valor del deslizador
+QueueHandle_t buzonLed;                     // tarea del MQTT -> pantalla: último comando
+volatile uint8_t estadoRed = TECNOVA_IDLE;  // red -> pantalla (1 byte: se lee entero)
+
+// Todo lo lento (portal, WiFi, HTTPS, MQTT) pasa acá, nunca en loop()
+void tareaRed(void *parametro) {
+  // 1. Datos de conexión: los guardados, o el portal si faltan. No reinicia.
+  TecnovaProvisioning::setAutoRestart(false);
+  String wifiSsid, wifiPassword, deviceId, devicePassword;
+  TecnovaProvisioning::begin(wifiSsid, wifiPassword, deviceId, devicePassword);
+
+  // 2. La conexión con el panel, también sin reinicios: begin() vuelve
+  //    enseguida. El objeto lo usa SOLO esta tarea (loop() le habla por colas).
+  TecnovaIoT *tecnova = new TecnovaIoT(deviceId, devicePassword);
+  tecnova->setAutoRestart(false);
+  tecnova->onCommand("led", [](JsonVariant value) {
+    int32_t v = value["value"].as<bool>() ? 1 : 0;
+    xQueueOverwrite(buzonLed, &v);   // corre en la tarea del MQTT: solo anotar
+  });
+  tecnova->begin(wifiSsid.c_str(), wifiPassword.c_str());
+
+  int32_t nivel = 0;
+  bool nivelPendiente = false;
+  for (;;) {
+    if (xQueueReceive(buzonNivel, &nivel, 0) == pdTRUE) nivelPendiente = true;
+    // setValue() da false hasta tener credenciales: se reintenta en la próxima
+    // vuelta. (int): en ESP-IDF 5, int32_t es long y la llamada sería ambigua.
+    if (nivelPendiente && tecnova->setValue("nivel", (int)nivel)) {
+      tecnova->sendNow("nivel");     // sale ya; como mucho uno cada 250 ms
+      nivelPendiente = false;
+    }
+    tecnova->loop();                 // a veces tarda unos segundos (HTTPS): por eso va acá
+    estadoRed = tecnova->getState();
+    TecnovaProvisioning::checkReconfigureButton();   // BOOT 3 s: reconfigurar
+    vTaskDelay(pdMS_TO_TICKS(20));   // cede el núcleo: así corren el WiFi y el vigilante
+  }
+}
+
+void setup() {
+  Serial.begin(921600);
+  buzonNivel = xQueueCreate(1, sizeof(int32_t));
+  buzonLed = xQueueCreate(1, sizeof(int32_t));
+  // ... iniciar la pantalla y la interfaz ...
+  // Núcleo 0, el del WiFi: el 1 queda para loop() y la pantalla.
+  xTaskCreatePinnedToCore(tareaRed, "red", 12288, NULL, 1, NULL, 0);
+}
+```
+
+Sin portal (con los datos escritos en el código) es todavía más simple: el
+objeto puede ser global, y tu `loop()` puede llamar directamente a
+`setValue()`, `sendNow()` y `getState()`. Es lo que hace
+[`examples/NetworkTask`](examples/NetworkTask/NetworkTask.ino). Con el
+portal, en cambio, el objeto recién se puede crear adentro de la tarea
+(los datos llegan después del portal), y por eso en el ejemplo de arriba
+`loop()` no lo toca nunca.
+
+### Qué corre en qué tarea
+
+| Llamada | Tarea | Regla |
+|---|---|---|
+| `TecnovaProvisioning::begin()` y el portal | La tarea de red | Bloquea mientras el portal está abierto. |
+| Callback de `onPortalOpen()` | Adentro del portal, en la tarea de red | Solo anotar o encolar. |
+| `begin()` y `loop()` | La tarea de red | Solo esa tarea las llama. |
+| Callback de `onCommand()` | La tarea interna del MQTT | Solo anotar o encolar; nada de `delay()` ni de pantalla. |
+| `setValue()`, `sendNow()`, `getState()`, `stateName()`, `isConnected()` | Cualquiera | No esperan a la red. |
+| `printStats()` | Cualquiera | Imprime con el candado tomado: no la llames desde la tarea de la pantalla. |
+| `checkReconfigureButton()`, `requestReconfigure()`, `confirmSuccess()`, `forget()` | La misma tarea que `TecnovaProvisioning::begin()` | Comparten la memoria NVS. |
+
+### LVGL (o cualquier librería gráfica) y las tareas
+
+LVGL no es *thread-safe*: si dos tareas lo tocan a la vez, la memoria se
+corrompe y el equipo se cuelga de forma aleatoria, días después. Las
+reglas son dos:
+
+- **Nunca** llames a una función `lv_*` desde un callback de `onCommand()`
+  u `onPortalOpen()`, ni desde la tarea de red.
+- Los datos van por una cola y se aplican desde un `lv_timer`, que corre
+  adentro de `lv_timer_handler()` -- o sea, en `loop()`, la única tarea que
+  toca la pantalla.
+
+```cpp
+lv_obj_t *interruptorLed;   // creados al armar la interfaz
+lv_obj_t *etiquetaRed;
+
+// Corre adentro de lv_timer_handler(), o sea en loop(): acá sí se toca LVGL
+void aplicarRed(lv_timer_t *timer) {
+  int32_t led;
+  if (xQueueReceive(buzonLed, &led, 0) == pdTRUE) {
+    if (led) lv_obj_add_state(interruptorLed, LV_STATE_CHECKED);
+    else lv_obj_remove_state(interruptorLed, LV_STATE_CHECKED);
+  }
+  static uint8_t estadoMostrado = 255;
+  if (estadoRed != estadoMostrado) {
+    estadoMostrado = estadoRed;
+    lv_label_set_text(etiquetaRed, TecnovaIoT::stateName((TecnovaState)estadoMostrado));
+  }
+}
+
+// El evento del deslizador también corre en loop(): solo deja el valor
+void alMoverNivel(lv_event_t *e) {
+  int32_t v = lv_slider_get_value((lv_obj_t *)lv_event_get_target(e));
+  xQueueOverwrite(buzonNivel, &v);
+}
+
+// En setup(), después de crear la interfaz:
+//   lv_timer_create(aplicarRed, 50, NULL);
+//   lv_obj_add_event_cb(deslizador, alMoverNivel, LV_EVENT_VALUE_CHANGED, NULL);
+```
+
+### Estados
+
+| `getState()` | Qué significa | Qué hacer |
+|---|---|---|
+| `TECNOVA_IDLE` | Todavía no se llamó a `begin()`. | -- |
+| `TECNOVA_WIFI_CONNECTING` | Esperando el WiFi (al arrancar o porque se cortó). | Nada: reintenta solo. Si no conecta nunca, revisá la red y su clave (y reconfigurá). |
+| `TECNOVA_FETCHING_CREDENTIALS` | Pidiendo las credenciales MQTT al panel (HTTPS). | Nada. |
+| `TECNOVA_CREDENTIALS_REJECTED` | El panel contestó que el `dId` o el password no valen (HTTP 401, 403 o 404). | Revisar el dispositivo en el panel, o reconfigurar. Reintenta cada 5 min. |
+| `TECNOVA_SERVER_UNAVAILABLE` | El pedido falló por otra causa: sin Internet, certificado, error del servidor o JSON inválido. | Nada: reintenta solo. El monitor serie dice la causa (por ejemplo, `Detalle TLS`). |
+| `TECNOVA_MQTT_CONNECTING` | Con credenciales; esperando que el broker acepte la sesión. | Nada. |
+| `TECNOVA_CONNECTED` | Sesión MQTT activa: se publica y llegan comandos. | -- |
+
+`getState()` funciona también en el modo por defecto (ahí no se ven
+nunca los dos estados de falla por mucho tiempo: la librería reinicia).
+Con `setAutoRestart(false)`, cada cambio de estado sale además por el
+monitor serie (`[TecnovaIoT] Estado: ...`).
+
+### Qué hace ante cada problema
+
+| Qué pasa | Qué hace la librería | Estado | Pedidos al webhook |
+|---|---|---|---|
+| No hay WiFi al arrancar | `begin()` vuelve al instante. El núcleo del ESP32 reintenta solo, y la librería le da un empujón a los 15, 45 y 105 s, y después cada 60 s. | `WIFI_CONNECTING` | 0 |
+| Se corta el WiFi con el equipo andando | Pasa a `WIFI_CONNECTING` al instante. A los 10 s da por muerta la sesión MQTT vieja, sin bloquear. Cuando vuelve el WiFi, esp-mqtt reconecta solo en 10 s o menos. | `WIFI_CONNECTING` → `MQTT_CONNECTING` → `CONNECTED` | 0 (1 si en 30 s no reconecta) |
+| Se corta Internet, pero el WiFi sigue andando | Nada avisa del corte: esp-mqtt lo nota cuando su ping (*keepalive*, de 30 s en este modo) queda sin respuesta, en menos de un minuto. Mientras tanto el estado sigue en `CONNECTED`. Después espera 30 s a que esp-mqtt reconecte y recién ahí pide credenciales, que fallan. En total, hasta un par de minutos hasta `SERVER_UNAVAILABLE`. | `CONNECTED` → `MQTT_CONNECTING` → `SERVER_UNAVAILABLE` | Como en la fila del webhook que falla |
+| Cambiaron las credenciales MQTT en el servidor | El broker las rechaza (CONNACK 4 o 5) y se piden de nuevo enseguida, si la espera anti-tormenta lo permite. | `MQTT_CONNECTING` → `FETCHING_CREDENTIALS` → ... | 1 |
+| El webhook falla (error 5xx, sin respuesta, certificado o JSON inválidos) | Reintenta a los 5, 10, 20, 40, 80 y 120 s, y después cada 120 s (más un 0-20 % al azar). Cada intento dura como mucho unos 35 s: DNS 15 s (fijo del núcleo), TCP 5, TLS 10 y lectura 5. | `SERVER_UNAVAILABLE` | Como mucho 1 cada 2 min, ya estabilizado |
+| El panel responde 401, 403 o 404 | Reintenta cada 5 min (más el azar). | `CREDENTIALS_REJECTED` | 1 cada 5 min |
+| El webhook anda, pero el MQTT nunca conecta | Pide credenciales cada 30 s o lo que diga la espera anti-tormenta, lo que sea mayor. | `MQTT_CONNECTING` | A los 30, 30, 30, 40, 80, 120... s |
+| Cambió la clave del router | Se queda en `WIFI_CONNECTING`, con un empujón cada 60 s. **No abre el portal solo**: hay que reconfigurar a mano (botón BOOT o `requestReconfigure()`). | `WIFI_CONNECTING` | 0 |
+
+La espera entre pedidos al webhook es una sola para todos los caminos, y
+vuelve a cero cuando el MQTT conecta. El azar existe para que los equipos
+de un aula que se recuperan del mismo corte no le pregunten al panel
+todos en el mismo segundo.
+
+En este modo la librería nunca llama a `delay()` ni a `ESP.restart()`. Lo
+que sí puede demorar una vuelta de `loop()` -- siempre con un tope -- es
+el pedido HTTPS (hasta unos 35 s; lo normal es de 1 a 3 s), cerrar el
+cliente MQTT para pedir credenciales nuevas (hasta unos 11 s si estaba a
+mitad de un intento) y una publicación con la red trabada (hasta 10 s).
+Por eso va en su propia tarea.
+
+### Tres cuidados más
+
+- **El paquete de CA es global.** La librería lo carga para todo el ESP32
+  (ver [Sobre el certificado TLS](#sobre-el-certificado-tls)). Si tu
+  proyecto tiene otras conexiones HTTPS, no llames a `setCACertBundle()`
+  (ni cargues otro paquete) mientras corre la librería.
+- **Contraseñas en el monitor serie.** La librería nunca imprime
+  contraseñas. Pero WiFiManager sí, si le subís el nivel de mensajes: con
+  `WM_DEBUG_LEVEL` en `WM_DEBUG_VERBOSE` (o más) imprime la clave del
+  dispositivo al guardar el portal (`device_pass:...`), y con
+  `WM_DEBUG_DEV`, también la del WiFi. Lo mismo puede pasar con
+  `CORE_DEBUG_LEVEL` en *verbose*. Usalos solo para depurar, y no
+  compartas ese registro.
+- **El portal es una red abierta**, con las páginas de WiFiManager para
+  subir firmware y borrar la configuración habilitadas: ver
+  [Seguridad del portal](#seguridad-del-portal). En una pantalla táctil,
+  donde se abre con un par de toques, conviene que el botón pida
+  confirmación.
 
 ## Sobre el certificado TLS
 
 La librería trae embebido (`src/TecnovaRootCaBundle.h`) un bundle mínimo de
 Autoridades Certificadoras raíz (GlobalSign Root CA + ISRG Root X1) --
-necesario para validar el certificado que presenta el broker al conectar
-por WSS. Es el mismo para **cualquier** dispositivo de **cualquier**
-usuario que hable con esta plataforma -- no hay que regenerarlo por
-dispositivo, porque valida al *servidor*, no al dispositivo que se
-conecta.
+necesario para validar el certificado que presenta el servidor. Desde la
+1.5.0 se usa en las **dos** conexiones: la del broker (MQTT sobre WSS) y
+el pedido de credenciales al webhook (HTTPS), que hasta la 1.4.0 no
+validaba nada (`setInsecure()`). Validar ese pedido importa: lleva el
+`dId` y el password del dispositivo, y la respuesta trae el usuario y la
+clave MQTT. Sin validar, cualquiera en la misma red podía hacerse pasar
+por el servidor y quedarse con todo.
+
+Es el mismo para **cualquier** dispositivo de **cualquier** usuario que
+hable con esta plataforma -- no hay que regenerarlo por dispositivo,
+porque valida al *servidor*, no al dispositivo que se conecta.
+
+Si el certificado no valida, el monitor serie muestra
+`Error del webhook: HTTP -1` y, abajo, una línea `Detalle TLS: ...` con
+la causa (por ejemplo, `X509 - Certificate verification failed`). La
+librería nunca cae a una conexión sin validar. Si el `-1` es por un
+problema de red (el servidor no contesta, no hay Internet, se agotó el
+tiempo de la conexión o del saludo TLS), esa línea no sale: el núcleo usa
+el mismo `-1` para todas esas fallas, y mostrarlo como detalle de TLS
+("Generic error") despistaría.
+
+Dos detalles técnicos:
+
+- **El bundle es estado global del ESP32**, no de cada conexión. La
+  librería lo carga en `begin()` y lo vuelve a cargar en cada pedido de
+  credenciales, siempre con el cliente MQTT detenido (si se cambiara
+  mientras el MQTT valida un certificado, leería memoria ya liberada).
+- **Desde ESP-IDF 5.4** (arduino-esp32 3.2 en adelante) cambió el formato
+  binario que espera ESP-IDF. El archivo queda siempre en el formato
+  viejo y la librería lo traduce en memoria al arrancar.
 
 Solo habría que regenerarlo si el servidor rotara a una Autoridad
-Certificadora fuera de esas dos. Para revisar la cadena real de un
-servidor (reemplazando `<host>` por el que corresponda):
+Certificadora fuera de esas dos. Hoy la cadena valida gracias al
+certificado de GTS Root R4 firmado de forma cruzada por GlobalSign Root
+CA, que vence el 28 de enero de 2028; está previsto ampliar el paquete en
+una 1.5.x. Para revisar la cadena real de un servidor (reemplazando
+`<host>` por el que corresponda):
 
 ```bash
 openssl s_client -connect <host>:443 -showcerts
@@ -478,11 +759,32 @@ openssl s_client -connect <host>:443 -showcerts
 
 ## Compatibilidad de versiones del core ESP32
 
-El struct de configuración del cliente MQTT nativo de ESP-IDF cambió de
-forma entre IDF 4.x (plano) e IDF 5.x (anidado). La librería detecta
-automáticamente cuál usa tu core instalado (vía `ESP_IDF_VERSION_MAJOR`) --
-no hace falta que hagas nada al respecto, compila igual con arduino-esp32
-2.x o 3.x.
+| Núcleo | Estado |
+|---|---|
+| arduino-esp32 2.0.x (ESP-IDF 4.4; en PlatformIO, `platform = espressif32` 6.x) | Probado en hardware. Es con el que corren los equipos en producción. |
+| arduino-esp32 3.x (ESP-IDF 5.x; en PlatformIO, la plataforma de pioarduino) | Compila (se compiló con 3.1.3 y 3.3.12); **no probado en hardware** todavía. |
+
+Entre un núcleo y otro hay tres diferencias, y la librería las resuelve
+sola al compilar, según la versión de ESP-IDF (`ESP_IDF_VERSION_MAJOR`):
+
+- El struct de configuración del cliente MQTT: plano en IDF 4.x y anidado
+  en IDF 5.x.
+- Las funciones del paquete de CA: en 2.x, las de la copia que trae
+  Arduino (`arduino_esp_crt_bundle_*`); en 3.x esa copia no existe y se
+  usan las de ESP-IDF (`esp_crt_bundle_*`).
+- El formato binario del paquete, que cambió en ESP-IDF 5.4: se traduce
+  en memoria (ver [Sobre el certificado TLS](#sobre-el-certificado-tls)).
+
+Hasta la 1.4.0 este README decía que la librería compilaba con 3.x, y no
+era cierto: usaba `arduino_esp_crt_bundle_*`, que en 3.x no existe. Se
+corrigió en la 1.5.0.
+
+`TecnovaProvisioning` depende además de WiFiManager: la 2.0.17 compila con
+arduino-esp32 3.3.12, pero no se probó en hardware. Con 3.x el programa
+crece: `examples/CaptivePortal` ocupa unos 1,3 MB y no entra en la
+partición de programa por defecto de un ESP32 de 4 MB (1,25 MB). Se
+arregla con otra tabla de particiones, por ejemplo agregando
+`board_build.partitions = min_spiffs.csv` al `platformio.ini`.
 
 ## Errores comunes y cómo entenderlos
 
@@ -496,6 +798,16 @@ solución.
   `TecnovaIoT` normalmente esto no debería pasar (la librería lo carga
   sola), pero si lo ves, revisá que no haya dos copias de la librería
   instaladas en conflicto.
+- **`Error del webhook: HTTP -1` y, abajo, `Detalle TLS: X509 - Certificate
+  verification failed`**: el certificado que presentó el servidor no
+  valida contra el paquete de CA de la librería. Desde la 1.5.0 el pedido
+  de credenciales se valida igual que el MQTT (ver [Sobre el certificado
+  TLS](#sobre-el-certificado-tls)), así que puede ser que algo en la red
+  esté interceptando la conexión, o que el servidor haya cambiado de
+  Autoridad Certificadora. En ese caso el MQTT tampoco conectaría: hay que
+  regenerar el paquete. Un `HTTP -1` **sin** línea `Detalle TLS` es un
+  problema de red: el DNS no resolvió, no hay Internet, un firewall
+  bloquea el puerto 443 o el servidor no contestó a tiempo.
 - **El webhook devuelve 302 en vez de 200**: si tu propio servidor está
   detrás de Cloudflare Access (o algo similar), puede estar exigiendo un
   login interactivo que un dispositivo no puede completar. Hay que

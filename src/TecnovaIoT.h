@@ -2,12 +2,13 @@
 //
 // Se encarga de todo lo necesario para que un dispositivo hable con el
 // panel: conectar WiFi, autenticarse por HTTPS contra el webhook del
-// dispositivo, validar el certificado TLS del broker, conectar y mantener
-// la sesión MQTT sobre WebSocket seguro (WSS), reconectar solo ante
-// cortes, y mapear los topics del protocolo de Tecnova a nombres de
-// variable legibles -- para que el código del proyecto solo tenga que
-// preocuparse por leer sus sensores y reaccionar a comandos, no por MQTT
-// ni TLS.
+// dispositivo, validar el certificado TLS del broker y del webhook,
+// conectar y mantener la sesión MQTT sobre WebSocket seguro (WSS), que se
+// reconecta sola (ante un corte de WiFi la librería reinicia el ESP32,
+// salvo con setAutoRestart(false)), y mapear los topics del protocolo de
+// Tecnova a nombres de variable legibles -- para que el código del
+// proyecto solo tenga que preocuparse por leer sus sensores y reaccionar a
+// comandos, no por MQTT ni TLS.
 //
 // Uso típico:
 //
@@ -36,6 +37,8 @@
 // examples/CaptivePortal si preferís cargar las credenciales desde un
 // portal cautivo en vez de escribirlas en el código (ver
 // TecnovaProvisioning.h y el README).
+// Ver examples/NetworkTask para usarla en una tarea propia, sin reinicios
+// (equipos con pantalla).
 //
 // NOTA PARA QUIEN LEA/MODIFIQUE ESTE CÓDIGO: adentro (ver la sección
 // "private" más abajo) hay dos detalles de implementación que vale la
@@ -49,7 +52,9 @@
 //     setValue() o al publicador automático). Sin protegerlo con un mutex,
 //     eso puede corromper la memoria de forma intermitente y muy difícil
 //     de reproducir. Por eso CUALQUIER acceso a _variables está envuelto
-//     en xSemaphoreTake/xSemaphoreGive.
+//     en xSemaphoreTake/xSemaphoreGive. Y al revés: nunca se llama a
+//     esp-mqtt con _mutex tomado (ver _publishDueVariables(), en el .cpp,
+//     que explica el deadlock que eso provocaba).
 //   - _pendingCallbacks: cuando llamás a onCommand(), todavía no sabemos
 //     qué variables tiene el dispositivo (eso se entera recién adentro de
 //     begin(), al consultar el panel) -- por eso los callbacks se guardan
@@ -91,6 +96,19 @@
 // aire {"value":""}. Ya no existe y ningún widget lo lee.)
 typedef std::function<void(JsonVariant value)> TecnovaCommandCallback;
 
+// Pasos de la conexión con el panel, en el orden en que se recorren al
+// arrancar. Se leen con getState() desde cualquier tarea.
+enum TecnovaState : uint8_t
+{
+	TECNOVA_IDLE = 0,             // todavía no se llamó a begin()
+	TECNOVA_WIFI_CONNECTING,      // esperando el WiFi (al arrancar o porque se cortó)
+	TECNOVA_FETCHING_CREDENTIALS, // pidiendo las credenciales MQTT al panel (HTTPS)
+	TECNOVA_CREDENTIALS_REJECTED, // el panel respondió que el dId o el password no valen (HTTP 401/403/404)
+	TECNOVA_SERVER_UNAVAILABLE,   // el pedido falló por otra causa: red, certificado, error del servidor o JSON inválido
+	TECNOVA_MQTT_CONNECTING,      // con credenciales; esperando que el broker acepte la sesión
+	TECNOVA_CONNECTED             // sesión MQTT activa: se publica y llegan comandos
+};
+
 class TecnovaIoT
 {
 public:
@@ -123,18 +141,37 @@ public:
 	void onCommand(const String &variableName, TecnovaCommandCallback callback);
 
 	// Conecta WiFi (si todavía no está conectado), pide las credenciales
-	// MQTT al webhook del dispositivo, y abre la conexión MQTT. Es
-	// bloqueante: si no logra conectar el WiFi o el webhook falla, reinicia
-	// el ESP32 y reintenta desde cero (mismo comportamiento validado en
-	// producción). Devuelve true si terminó de arrancar la conexión MQTT
-	// (no espera a que esté conectada -- eso es asíncrono, usar
-	// isConnected() para saberlo).
+	// MQTT al webhook del dispositivo, y abre la conexión MQTT. Hace cosas
+	// distintas según setAutoRestart():
+	//
+	//   - true (por defecto): es bloqueante. Si no logra conectar el WiFi o
+	//     el webhook falla, reinicia el ESP32 y reintenta desde cero (mismo
+	//     comportamiento validado en producción). Devuelve true si terminó
+	//     de arrancar la conexión MQTT (no espera a que esté conectada --
+	//     eso es asíncrono, usar isConnected() para saberlo).
+	//   - false: no espera nada. Guarda una copia propia del SSID y la
+	//     contraseña, deja al WiFi conectándose y vuelve enseguida con true;
+	//     el resto (credenciales, MQTT) lo hace loop() de a pasos. Si
+	//     wifiSsid viene vacío, usa la red que el ESP32 ya tenga guardada.
+	//     Devuelve false solo si begin() ya se había llamado antes.
 	bool begin(const char *wifiSsid, const char *wifiPassword);
 
-	// Hay que llamarlo en cada vuelta de loop(). Publica automáticamente
-	// las variables que ya cumplieron su intervalo de envío
-	// (variableSendFreq configurado en el panel), y maneja la reconexión
-	// si se cae el WiFi o el MQTT.
+	// Hay que llamarlo en cada vuelta de loop() (o de la tarea donde corra
+	// la librería). Publica automáticamente las variables que ya cumplieron
+	// su intervalo de envío (variableSendFreq configurado en el panel) y los
+	// pedidos de sendNow(). Qué hace ante un corte depende de
+	// setAutoRestart():
+	//
+	//   - true (por defecto): si se corta la sesión MQTT, esp-mqtt la
+	//     reintenta solo, y si pasan 30 s sin volver se piden credenciales
+	//     de nuevo (si el panel no las entrega, reinicia). Si se corta el
+	//     WiFi NO lo reconecta: espera 15 s y reinicia el ESP32, que es la
+	//     forma más simple de empezar de cero en un sensor suelto.
+	//   - false: nunca reinicia ni usa delay(). Recorre los pasos de
+	//     getState() -- esperar el WiFi, pedir credenciales, esperar al
+	//     broker -- y reintenta solo lo que falle, cada vez más espaciado.
+	//     Casi siempre vuelve enseguida; lo único que tarda es el pedido
+	//     HTTPS de credenciales (1 a 3 s lo normal).
 	void loop();
 
 	// Actualiza el valor de una variable -- se publica solo, en su próximo
@@ -198,6 +235,53 @@ public:
 	// hay "vuelve del sleep", es indistinguible de un reset.
 	void deepSleepSeconds(uint64_t seconds);
 
+	// ---- Equipos con pantalla (o cualquier loop() que no puede esperar) ----
+	// Ver "Dispositivos con pantalla" en el README y examples/NetworkTask.
+
+	// true (por defecto): el comportamiento de siempre. Si el WiFi no conecta
+	// o se corta, o el panel no entrega credenciales, la librería espera unos
+	// segundos y reinicia el ESP32 para empezar de cero: lo más simple y
+	// robusto para un sensor suelto.
+	// false: begin() no espera nada (guarda una copia de los datos y vuelve) y
+	// loop() hace la conexión de a pasos (ver getState()), reintentando solo
+	// lo que falle -- WiFi, credenciales, MQTT -- cada vez más espaciado y SIN
+	// reiniciar nunca. Lo único que puede tardar es el pedido HTTPS de
+	// credenciales (1 a 3 s lo normal). Pensado para equipos con pantalla,
+	// donde un reinicio se ve como un apagón: llamá a begin() y loop() desde
+	// una tarea propia de FreeRTOS. En este modo la sesión MQTT usa un
+	// keepalive de 30 s (en vez de 120): si se corta Internet con el WiFi
+	// andando, se nota en menos de un minuto.
+	// Llamalo ANTES de begin(); después no tiene efecto (avisa por serie).
+	void setAutoRestart(bool enabled);
+
+	// En qué paso está la conexión. Se puede llamar desde CUALQUIER tarea (por
+	// ejemplo, la que dibuja la pantalla): solo lee dos variables, no toma
+	// ningún candado ni espera a la red. Funciona en los dos modos.
+	TecnovaState getState() const;
+
+	// El estado en texto, sin tildes: "sin iniciar", "conectando WiFi",
+	// "pidiendo credenciales", "credenciales rechazadas", "servidor no
+	// disponible", "conectando MQTT", "conectado" ("desconocido" si no vale).
+	static const char *stateName(TecnovaState state);
+
+	// Publica YA el último valor que le diste a la variable con setValue(), sin
+	// esperar su frecuencia de envío: para controles que alguien acaba de tocar
+	// en una pantalla. No publica adentro de la llamada: anota el pedido y lo
+	// cumple loop() en su próxima vuelta, así que nunca traba a quien lo llama
+	// y se puede llamar desde cualquier tarea (incluso desde un onCommand()).
+	// Entre dos envíos de la misma variable pasan al menos 250 ms: si la llamás
+	// muchas veces seguidas (un deslizador que se arrastra) los valores
+	// intermedios se saltean, pero el ÚLTIMO siempre sale. Si la conexión se
+	// cae (aunque sea justo en el envío), el pedido queda en pie y sale apenas
+	// vuelva la sesión MQTT. Ojo: eso vale entero con setAutoRestart(false).
+	// En el modo por defecto, un corte de WiFi reinicia el ESP32, y 30 s sin
+	// MQTT hacen que se vuelvan a pedir las credenciales, que rearma la lista
+	// de variables: en los dos casos el pedido y el último valor se pierden
+	// (hay que volver a llamar a setValue()).
+	// Devuelve false si la variable no existe (o todavía no llegaron las
+	// credenciales) o si es de salida ("El panel la acciona"; avisa una vez).
+	bool sendNow(const String &variableName);
+
 private:
 	struct Variable
 	{
@@ -213,8 +297,8 @@ private:
 		unsigned long lastSendMs;
 		String lastPayloadJson; // último valor, ya serializado (ej {"value":1,"save":0})
 		unsigned long counter;  // mensajes procesados (recibidos o enviados) para esta variable
-		// Para no repetir el aviso de "setValue() sobre una variable de
-		// salida" en cada vuelta de loop(): se imprime una sola vez por
+		// Para no repetir el aviso de "setValue() (o sendNow()) sobre una
+		// variable de salida" en cada vuelta de loop(): se imprime una sola vez por
 		// variable, si no inundaría el monitor serie. Vive acá adentro, y
 		// _fetchCredentials() reconstruye las Variables, así que el aviso
 		// vuelve a salir una vez más si se vuelven a pedir credenciales
@@ -223,6 +307,18 @@ private:
 		// veces por segundo.
 		bool warnedOutputSetValue;
 		TecnovaCommandCallback callback;
+		bool sendRequested; // sendNow(): publicar apenas pasen 250 ms desde el último envío
+	};
+
+	// Cómo terminó un pedido de credenciales al webhook. Se distingue el
+	// rechazo (el panel dice que el dId o el password no valen) del resto de
+	// las fallas porque en el modo sin reinicio se reintentan distinto: un
+	// rechazo no se arregla solo, así que se pregunta mucho menos seguido.
+	enum FetchResult : uint8_t
+	{
+		FETCH_OK,
+		FETCH_REJECTED,
+		FETCH_FAILED
 	};
 
 	String _deviceId;
@@ -249,11 +345,36 @@ private:
 	String _lastReceivedMsg;
 	unsigned long _lastStatsMs; // throttle interno de printStats(), independiente de cuánto la llame el usuario
 
+	// Modo por defecto: se usan igual que en la 1.4.0 (apuntan a lo que
+	// recibió begin()).
 	const char *_wifiSsid;
 	const char *_wifiPassword;
 
+	// ---- Estado de la conexión (ver setAutoRestart() y getState()) ----
+	// Quién escribe cada cosa está explicado al principio del .cpp
+	// ("REGLAS ENTRE TAREAS").
+	bool _autoRestart;               // true = comportamiento de la 1.4.0
+	volatile uint8_t _state;         // un TecnovaState; lo escribe SOLO la tarea de begin()/loop()
+	String _wifiSsidCopy;            // modo sin reinicio: copias propias (los punteros de la
+	String _wifiPasswordCopy;        // 1.4.0 pueden apuntar a Strings ya destruidos)
+	unsigned long _stateSinceMs;     // desde cuándo se espera al broker (MQTT_CONNECTING)
+	unsigned long _wifiLostAtMs;     // cuándo se cortó el WiFi
+	unsigned long _wifiKickAtMs;     // último empujón al WiFi...
+	unsigned long _wifiKickEveryMs;  // ...y cada cuánto el próximo
+	bool _mqttDropped;               // en este corte ya se pidió cerrar la sesión MQTT vieja
+	unsigned long _fetchGateStartMs; // espera anti-tormenta del webhook: desde cuándo...
+	unsigned long _fetchGateMs;      // ...y cuánto
+	unsigned long _fetchBackoffMs;   // base de la espera: se duplica en cada pedido sin sesión MQTT
+	uint8_t _waitState;              // qué mostrar mientras la espera no venció (TecnovaState)
+	volatile bool _mqttAuthRefused;  // el broker rechazó usuario/clave (CONNACK 4 o 5)
+
 	bool _connectWifi();
-	bool _fetchCredentials();
+	FetchResult _fetchCredentials(); // antes devolvía bool
+	bool _beginNoRestart(const char *wifiSsid, const char *wifiPassword);
+	void _loopNoRestart();
+	void _fetchIfAllowed();
+	void _beginWifi();
+	void _setState(TecnovaState state);
 	void _startMqtt();
 	void _stopMqtt();
 	void _publishDueVariables();

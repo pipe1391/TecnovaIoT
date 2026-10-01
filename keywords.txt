@@ -9,6 +9,8 @@
 TecnovaIoT	KEYWORD1
 TecnovaProvisioning	KEYWORD1
 TecnovaCommandCallback	KEYWORD1
+TecnovaState	KEYWORD1
+TecnovaPortalCallback	KEYWORD1
 
 #######################################
 # Methods and Functions (KEYWORD2)
@@ -25,3 +27,22 @@ deepSleepSeconds	KEYWORD2
 confirmSuccess	KEYWORD2
 checkReconfigureButton	KEYWORD2
 forget	KEYWORD2
+setAutoRestart	KEYWORD2
+getState	KEYWORD2
+stateName	KEYWORD2
+sendNow	KEYWORD2
+onPortalOpen	KEYWORD2
+setPortalTimeout	KEYWORD2
+requestReconfigure	KEYWORD2
+
+#######################################
+# Constants (LITERAL1)
+#######################################
+
+TECNOVA_IDLE	LITERAL1
+TECNOVA_WIFI_CONNECTING	LITERAL1
+TECNOVA_FETCHING_CREDENTIALS	LITERAL1
+TECNOVA_CREDENTIALS_REJECTED	LITERAL1
+TECNOVA_SERVER_UNAVAILABLE	LITERAL1
+TECNOVA_MQTT_CONNECTING	LITERAL1
+TECNOVA_CONNECTED	LITERAL1

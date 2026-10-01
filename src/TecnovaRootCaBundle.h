@@ -1,8 +1,18 @@
 // Detalle interno de TecnovaIoT -- NO incluir directamente desde un sketch,
 // usar #include <TecnovaIoT.h>.
 //
-// Bundle minimo de CA raiz para validar el certificado TLS del broker MQTT
-// (WSS) de la plataforma, via arduino_esp_crt_bundle_set().
+// Bundle minimo de CA raiz para validar el certificado TLS del servidor de
+// la plataforma: el del broker MQTT (WSS) y, desde la 1.5.0, tambien el del
+// webhook de credenciales (HTTPS) -- es el mismo host y el mismo
+// certificado. Se carga con arduino_esp_crt_bundle_set() en arduino-esp32
+// 2.x y con esp_crt_bundle_set() en 3.x (ver _installRootCaBundle() en
+// TecnovaIoT.cpp).
+//
+// Desde ESP-IDF 5.4 el formato binario que espera esp_crt_bundle cambio
+// (tabla de offsets al principio). Este arreglo queda SIEMPRE en el formato
+// viejo, descripto abajo: con IDF >= 5.4 la libreria lo traduce en memoria
+// al arrancar (_convertBundleToIdf54() en TecnovaIoT.cpp), asi que no hay
+// que tocar nada aca.
 //
 // Contiene 2 certificados raiz autofirmados, en el formato binario que
 // espera esp_crt_bundle (num_certs + por cada uno: name_len, key_len,
